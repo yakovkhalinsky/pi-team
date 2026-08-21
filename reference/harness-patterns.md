@@ -1,10 +1,22 @@
 # Harness Patterns — pi.dev Instantiation
 
-How the Agentic Team Protocol is instantiated on the pi.dev coding agent harness.
+How the [Agentic Team Protocol](https://yakov.khalinsky.com/agentic-team-protocol/papers/01-protocol/) instantiates on pi.dev, per the paper's §7 ("harness-agnostic; pi packages, Claude Project instructions, or Cursor `.cursorrules` files") and the [pi-agents-team](https://github.com/KristjanPikhof/Pi-Agents-Team) extension.
+
+## Mapping paper roles to pi.dev profiles
+
+| Paper role | Profile name | Thinking | Owns stage |
+|---|---|---|---|
+| Team Lead (orchestrator) | `team-lead` | high | Stage 1 (Goal receipt); closure half of Stage 7 |
+| Dispatcher | `dispatcher` | high | Stage 2 (Routing and assignment) |
+| Researcher | `researcher` | high | Stage 3 (Context gathering, when uncertainty is high) |
+| Builder | `builder` | medium | Stage 4 (Action — artefact production) |
+| Runtime | `runtime` | high | Stage 4 (Action — live-system execution) |
+| Verifier | `verifier` | high | Stage 5 (Verification) |
+| Archivist | `archivist` | medium | Stage 6 (Recording and archival); ownership-transfer half of Stage 7 |
+
+There is no seventh profile. The paper says (§4): "the Builder, Runtime, or specialist executes the plan and records what was done" — when a goal needs a capability the six cannot supply, the Builder / Runtime consume tools available in their harness. The protocol does not enumerate further specialists.
 
 ## Architecture
-
-Pi Team uses the [pi-agents-team](https://github.com/KristjanPikhof/Pi-Agents-Team) extension's orchestrator-worker RPC model:
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -13,8 +25,14 @@ Pi Team uses the [pi-agents-team](https://github.com/KristjanPikhof/Pi-Agents-Te
 │                                                            │
 │  User ◄──► Orchestrator                                    │
 │                │                                           │
-│                ├── delegate_task(role, prompt, skills) ──► Worker 1 (RPC)
-│                ├── delegate_task(role, prompt, skills) ──► Worker 2 (RPC)
+│                ├── delegate_task(profile, prompt, skills)  │
+│                │                                           │
+│                ├── delegate_task(dispatcher) ──► Worker 1 │
+│                ├── delegate_task(researcher)  ──► Worker 2 │
+│                ├── delegate_task(builder)     ──► Worker 3 │
+│                ├── delegate_task(runtime)     ──► Worker 4 │
+│                ├── delegate_task(verifier)    ──► Worker 5 │
+│                ├── delegate_task(archivist)   ──► Worker 6 │
 │                │                                           │
 │                ├── wait_for_agents(ids) ◄── zero-token    │
 │                │                                           │
@@ -28,10 +46,24 @@ Pi Team uses the [pi-agents-team](https://github.com/KristjanPikhof/Pi-Agents-Te
 
 ### Key properties
 
-- **One visible orchestrator session** — the user's main pi session
-- **Many subordinate RPC workers** — `pi --mode rpc --no-session` processes
+- **One visible orchestrator session** — the user's main pi session hosts Stages 1 and 7
+- **Many subordinate RPC workers** — `pi --mode rpc --no-session` processes, each running one paper role
 - **Compact worker outputs** — orchestrator sees summaries + `<final_answer>` only
 - **Explicit supervision** — delegate, wait, steer, relay, result tools
+
+## The seven stages, by lifecycle
+
+| Stage | Owner | What the orchestrator does |
+|---|---|---|
+| 1. Goal receipt | Team Lead | Capture requester, constraints, scope, package fit |
+| 2. Routing and assignment | Dispatcher | `delegate_task(dispatcher, …)` |
+| 3. Context gathering | Researcher | `delegate_task(researcher, …)` (skipped when uncertainty is low) |
+| 4. Action | Builder / Runtime | `delegate_task(builder, …)` or `delegate_task(runtime, …)` |
+| 5. Verification | Verifier | `delegate_task(verifier, …)` |
+| 6. Recording and archival | Archivist | `delegate_task(archivist, …)` |
+| 7. Hand-off or closure | Archivist records; Team Lead closes | Either `[closure]` or `[handoff]` |
+
+The optional stage is Stage 3. The paper says (§4): "the Researcher leads when uncertainty is high; otherwise the owner consults the Archivist." In practice: when the Dispatcher's recorded confidence is below the project threshold, route to the Researcher first; otherwise the Builder / Runtime consult the Archivist directly via `agent_message(archivist, …)`.
 
 ## Orchestrator contract
 
@@ -39,23 +71,14 @@ The orchestrator is the only agent that speaks to the user. Workers are backgrou
 
 ### Direct answer or delegate
 
-The orchestrator may answer directly for:
-- Trivial, already-known, or tiny bounded work
-
-The orchestrator must delegate:
-- Investigation, mapping, review, multi-file changes, tests
-- Context-hungry work where delegation costs less than the answer
+The orchestrator may answer directly for trivial, already-known, or tiny bounded work. The orchestrator must delegate substantial investigation, review, mapping, and multi-file changes.
 
 ### Wait, don't poll
 
 ```
 1. delegate_task → returns worker id(s)
-2. wait_for_agents(ids) → zero-token wait, returns on:
-   - all_terminal: every worker done
-   - relay_raised: worker has a question
-   - timeout: default 5 min
-   - aborted: wait cancelled
-3. If relay_raised: read relay, answer via agent_message, wait again
+2. wait_for_agents(ids) → zero-token wait
+3. If relay_raised: answer via agent_message, wait again
 4. If all_terminal: agent_result per worker, synthesise
 ```
 
@@ -78,6 +101,7 @@ Every worker prompt assumes:
 - Keeps output compact and structured
 - Raises a relay question rather than blocking forever
 - Wraps final deliverable in `<final_answer>…</final_answer>`
+- Signs every comment with the role name verbatim (paper §5.3: "identity discipline on every write")
 
 ### Result shape
 
@@ -89,18 +113,11 @@ findings:
 - bullet 1
 - bullet 2
 
-read_files:
-- path/one.ts
-- path/two.ts
-
-changed_files:
-- path/three.ts
-
 risks:
-- edge case worth flagging
+- anything the next stage should know
 
 next_recommendation:
-- what to do next
+- what the orchestrator should route next
 </final_answer>
 ```
 
@@ -108,82 +125,34 @@ next_recommendation:
 
 Workers must omit `relay_question` entirely when they have nothing to ask. Placeholder values like `none`, `n/a`, `-` are filtered as "no relay."
 
-## Mapping protocol roles to pi.dev workers
-
-| Protocol role | pi.dev profile | Thinking level | When spawned |
-|---|---|---|---|
-| Team Lead | `team-lead` | high | Orchestrator itself (or dedicated worker for large teams) |
-| Principal Architect | `principal-architect` | high | Design gate, review board |
-| Sceptical Architect | `sceptical-architect` | high | Design gate, review board (blind-first) |
-| Security Reviewer | `security-reviewer` | high | When `review-gates: security` |
-| Integrator | `integrator` | medium | After all approvals |
-| Backend | `backend` | medium | Implementation tasks |
-| Frontend | `frontend` | medium | Implementation tasks |
-| QA | `qa` | medium | When `review-gates: qa` |
-| Reviewer | `reviewer` | medium | Supporting review |
-| Product Manager | `product-manager` | medium | Triage, scope, acceptance |
-| Explorer | `explorer` | low | Fast investigation |
-| Fixer | `fixer` | medium | Bug fixes |
-| Librarian | `librarian` | medium | Documentation |
-| Observer | `observer` | low | Monitoring |
-| Oracle | `oracle` | high | Research |
-| Designer | `designer` | medium | UI/UX specifications |
-
 ## Skill discovery
 
 Pi skills are host-level capabilities from the Pi startup banner. Pass installed skill names through `delegate_task.skills`:
 
 ```json
 {
-  "profileName": "backend",
+  "profileName": "researcher",
   "skills": ["superpowers:test-driven-development"],
-  "taskPrompt": "Implement the CSV export endpoint..."
+  "taskPrompt": "Reduce uncertainty on whether the new auth flow breaks the legacy contract..."
 }
 ```
 
 When `skills` is non-empty, worker skill discovery is enabled. Omit when no installed skill clearly fits.
 
-## Model extensions
+## Identity discipline
 
-Provider/model extensions are role config, not prompt routing. Declare them as `access.extensions` so the worker process loads those Pi `--extension`/`-e` sources before model resolution:
+The paper (§7): "identity discipline on every write." Every worker signs with its role name verbatim. The Dispatcher refuses a marker whose claimed signer is not allowed for that marker.
 
-```json
-{
-  "backend": {
-    "access": {
-      "extensions": ["myAnthropic/claude-opus-4"]
-    }
-  }
-}
-```
-
-## Session persistence and recovery
-
-Pi Agents Team writes compact worker transitions to Pi's append-only JSONL session:
-- Bounded worker/profile identity, terminal status, timestamps
-- Compact summaries and Pi-reported usage
-- Task metadata, prompts, paths, relays, final answers stay out of persisted payload
-
-Restored live or reusable workers become `exited` because their RPC processes are not attached. Saved summaries and usage remain available.
-
-**Storage warning:** At 10,000 compact records or 64 MiB on the active branch, the extension warns once and recommends a new session.
-
-## Harness mode vs CLI mode
-
-| CLI-process mechanism | Harness-mode equivalent |
-|---|---|
-| `launch-team.sh start/team` (spawn) | `delegate_task` with composed prompt |
-| Mailbox files | Harness agent-to-agent messages (relay) |
-| Heartbeats | Harness lifecycle/idle notifications |
-| pid files, tmux | Not applicable — harness owns supervision |
-| Filesystem degradation statement | Not needed — harness delivers messages |
-
-Everything else is unchanged: the tracker is still the single source of durable truth, markers and statuses are still the protocol, and the report-before-idle contract applies.
+- A comment signed `dispatcher` is accepted at Stage 2; rejected at Stage 5.
+- A comment signed `verifier` is accepted at Stage 5; rejected at Stage 2.
+- No role signs a Stage it does not own.
 
 ## Security boundary
 
-`delegate_task` produces context but cannot authenticate a harness-native process. Protocol gate markers must be submitted by a role spawned through the trusted launcher or a harness integration that provides an equivalent protected per-instance capability channel.
+The protected tier (§8 governance implication): the orchestrator refuses to delegate a Stage 4 task to the Runtime whose target is production instances, secrets, IAM, certificates, DNS, backups, logs, or force-push, without explicit human approval.
 
-- A **gating reviewer** is spawned through a protected launcher/harness capability
-- An **advisory reviewer** is a native harness subagent without that channel — its report routes back through harness messaging, never as a mandatory approval marker
-- If all required authenticated contexts are unavailable, record a self/advisory review and escalate
+`delegate_task` produces context but cannot authenticate a harness-native process. Protocol-stage markers must be submitted by a role spawned through a trusted launcher or a harness integration that provides an equivalent protected per-instance capability channel.
+
+- A **gating role** is spawned through a protected launcher / harness capability
+- An **advisory role** is a native harness subagent without that channel — its report routes back through harness messaging, never as a mandatory approval marker
+- If all required authenticated contexts are unavailable, record a self / advisory review and escalate

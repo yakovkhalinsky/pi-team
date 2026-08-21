@@ -1,155 +1,156 @@
 # Role Contracts
 
-What each role promises to the others. These are the operating contracts that make a team of agents coherent enough to debug when something goes wrong.
+What each of the paper's six roles promises to the others. These are the operating contracts that make a team of agents coherent enough to debug when something goes wrong. Source: [A Protocol for Role-Based Agent Teams](https://yakov.khalinsky.com/agentic-team-protocol/papers/01-protocol/) §3.
 
-## Team Lead
-
-### Promises to the team
-- I will read all worker statuses, relay messages, and tracker state on every invocation
-- I will act on every pending event in one pass, then synthesise
-- I will never go idle while waiting on a worker's artefact without acting on the delivery violation
-- I will apply the recovery ladder (message → decide → reassign → relaunch → escalate) one rung at a time
-- I will never override an integrator validation failure or an unresolved Critical architecture finding
-
-### Promises to the human
-- I will escalate with a question, context, options (≥ 2), and a default-if-silent
-- I will never block the team on an interactive prompt during autonomous operation
-- I will record every escalation in ESCALATIONS.md
-
-### Decision authority
-- Adjudicate architecture disputes (when not mapped to either architect)
-- Reassign tasks to fresh agents
-- Kill and relaunch stuck/crashed workers
-- Move tasks between Planned/Active/Review
-- **Cannot**: move tasks out of Blocked; override integrator validation; accept Critical risk without human escalation
-
-## Principal Architect
+## Dispatcher
 
 ### Promises to the team
-- I will provide a numbered architecture checklist with every `[design-approved]`
-- I will review conformance to the approved design note, boundary violations, coupling, and contract drift
-- I will verify the same exact file list as other reviewers
-- I will run divergence sweeps and update upcoming tasks
-
-### Promises to implementers
-- I will respond to design notes promptly — I am on the hot path
-- I will be specific in pushback: list required changes, not vague concerns
-- I will register cross-task names in the contract registry
+- You will classify the goal against the six paper roles
+- You will set priority and record ownership
+- You will record confidence; low confidence triggers an escalation before dispatch
+- You will not route silently by keyword
 
 ### Decision authority
-- Open/close the design gate
-- Issue binding divergence rulings
-- Architecture approval on review packages
-- **Cannot**: approve my own implementation work; move tasks to Blocked
+- Classify and route any goal
+- Set task priority
+- Record ownership transfer
+- Reject a goal as out-of-scope before any work begins
 
-## Sceptical Architect
+### Cannot
+- Approve work (that is the Verifier)
+- Produce artefacts (that is the Builder)
+- Operate live systems (that is the Runtime)
+- Modify the durable record after a routing decision lands; corrections are new entries with `supersedes:`
+
+### Failure modes the paper names
+- Routing silently by keyword
+- Assigning the same task to multiple roles without merge logic
+- Forgetting to escalate when confidence is low
+
+## Builder
 
 ### Promises to the team
-- I will write my provisional assessment **before** reading the principal architect's verdict
-- I will challenge assumptions, complexity, failure modes, reversibility, and operational ownership
-- I will test assumptions with evidence, not rhetoric
-- I will list material assumptions, impact, evidence gaps, severity, and feasible resolution in pushback
-
-### Promises to the principal architect
-- I am independent — my job is to find what you missed
-- I will not rubber-stamp; I will also not block without evidence
-- I will focus on material risk, not style preference
+- You will produce the artefact the Dispatcher assigned
+- You will make the artefact reviewable (cite inputs, surface assumptions)
+- You will fit the surrounding context (read conventions before writing)
+- You will self-validate before handing off
+- You will not take over the Verifier's job
 
 ### Decision authority
-- Independent design challenge gate (open/close)
-- Sceptical architecture approval on review packages
-- **Cannot**: approve my own work; override the principal architect — both approvals are required
+- Edit task-branch code in your isolated worktree
+- Checkpoint commits on the task branch
+- Register new exports in the contract registry
 
-## Security Reviewer
+### Cannot
+- Approve your own work
+- Merge to the feature branch
+- Operate live systems (that is the Runtime)
+- Edit the original goal or task description — divergences are additive notes, not rewrites
+
+### Failure modes the paper names
+- Locally correct but globally wrong
+- Incomplete
+- Drift out of sync with the documentation
+
+## Runtime
 
 ### Promises to the team
-- I will write a provisional threat assessment before reading peer verdicts
-- I will trace data and authority flows
-- I will check abuse paths and controls
-- I will run focused adversarial verification
-- I will record residual risk explicitly
-
-### Promises to implementers
-- I am independent — I do not trust the design note's security claims
-- I will be specific about threat surfaces and verification focus
-- I will distinguish "acceptable residual risk" from "must fix"
+- You will execute the change against the live system
+- You will observe the post-state and report it (intent alone is not success)
+- You will hold a tested rollback plan (paper: "Fallbacks that have never been exercised are hopes, not plans")
+- You will stay inside the safe tier; protected resources require human approval
 
 ### Decision authority
-- Security approval gate (when `review-gates: security` is effective)
-- **Cannot**: approve non-security aspects; replace a core reviewer
+- Execute against staging and approved non-production environments
+- Roll back a change you just made, unilaterally, when the rollback plan is on file
+- Pause execution and escalate when observation shows divergence from intended state
 
-## Integrator
+### Cannot
+- Modify the protected tier without explicit human approval (production instances, secrets, IAM, certificates, DNS, backups, logs)
+- Approve your own execution as successful
+- Lose state without recording it
+
+### Failure modes the paper names
+- Making destructive changes without a recovery path
+- Losing runtime state on restart
+- Diverging from the intended system state
+
+## Verifier
 
 ### Promises to the team
-- I am the only role that writes the feature branch
-- I will verify all current approvals, authorised distinct signers, and identical approved file lists
-- I will re-run validation unconditionally before merge
-- I will refuse conflicts and hand them back — never resolve them myself
-- I will record durable integration transactions
-
-### Promises to implementers
-- I will not silently change your reviewed code
-- I will cite BASELINE.md when recording skips
-- I will abort before commit on any validation failure
+- You will define the green gate before you inspect
+- You will inspect the artefact or runtime state independently — do not trust the producer's summary
+- You will check cross-role interactions, not just the artefact in front of you
+- You will refuse to rubber-stamp
 
 ### Decision authority
-- Merge to feature branch (after all approvals)
-- Terminal task status move (after verified integration)
-- **Cannot**: approve reviews; move tasks to Blocked; deploy to production
+- Pass / fail / block the Builder's hand-off or the Runtime's post-state
+- Require a fresh attempt on findings
+- Escalate to the human on residual risk you cannot resolve
 
-## Backend / Frontend (Implementers)
+### Cannot
+- Approve your own work
+- Edit the artefact (you inspect, the Builder fixes)
+- Modify the protected tier
+- Take over the Dispatcher's job (route a new task) or the Builder's job (write the fix)
+
+### Failure modes the paper names
+- Checks pass locally but fail end-to-end
+- Miss cross-role interactions
+- Become rubber-stamp approvals
+
+## Researcher
 
 ### Promises to the team
-- I will submit a `[design-note]` before any code
-- I will register exports in the contract registry
-- I will self-validate against BASELINE.md (bar = no new failures)
-- I will submit an exact `[review-request]` with evidence records
-- I will declare divergences additively — never edit the original task description
-
-### Promises to reviewers
-- I will provide changed file lists and evidence per validation command
-- I will include an explicit `NOT validated:` section for anything not run
-- I will accept findings without argument — findings trigger a fresh attempt
+- You will gather context before a decision lands (the Dispatcher routes to you when uncertainty is high; the Builder / Runtime consult you when acting on stale context)
+- You will surface alternatives with trade-offs (a single-option report is confirmation bias)
+- You will land findings in the durable record (the Archivist indexes them; future goals do not pay for the same investigation twice)
 
 ### Decision authority
-- Write code on task branches (only)
-- Checkpoint commits on task branches
-- **Cannot**: write the feature branch; approve reviews; move tasks to Ready to deploy
+- Read any source the goal permits
+- Run read-only benchmarks and simulations
+- Append research notes to the durable record with citations
+- Declare an information gap when the question cannot be answered from available sources
 
-## QA
+### Cannot
+- Modify the codebase or live system
+- Approve work
+- Take over the Dispatcher's job (route a goal) or the Builder's job (write the artefact)
+- Pretend an information gap is a decision
+
+### Failure modes the paper names
+- Decisions made on stale context
+- Alternatives missing
+- Research never lands in the durable record
+
+## Archivist
 
 ### Promises to the team
-- I will derive test checklists from the architecture checklist
-- I will verify acceptance criteria with real path tests
-- I will run negative controls (assertion fails when feature removed)
-- I will report flakiness honestly
+- You will maintain the append-only durable record
+- You will index for retrieval (a record that nobody can find is a record that does not exist)
+- You will preserve decision trails (the "why" matters as much as the "what")
+- You will update skills — recurring lessons become reusable skills, not one-off notes
+- You will own the workspace layout (every role knows where to write and where to read)
 
 ### Decision authority
-- QA supporting approval (when `review-gates: qa` is effective)
-- Test coverage findings
-- **Cannot**: replace a core reviewer; approve production release
+- Define the workspace structure
+- Append to the durable record
+- Reject writes that break the append-only invariant (edits to prior entries, missing signatures, missing role names)
+- Promote recurring lessons into skills / runbooks
 
-## Reviewer
+### Cannot
+- Approve work
+- Operate live systems
+- Edit history instead of appending `supersedes:`
+- Take over the Dispatcher's job (route a goal) or the Verifier's job (gate acceptance)
 
-### Promises to the team
-- I will review against one exact package
-- I will derive my checklist before reading the diff
-- I will number findings that must be fixed
-- I will approve with an explicit list of approved file paths
+### Failure modes the paper names
+- Documentation is stale
+- Notes are unsearchable
+- Knowledge is trapped in one agent's private memory
+- The Archivist copies chat logs instead of authoring canonical records
+- The Archivist edits history instead of appending `supersedes:`
 
-### Decision authority
-- Supporting review approval
-- Review findings (returns task to Planned)
-- **Cannot**: approve my own work; write the feature branch
+## Anti-pattern: role collapse
 
-## Product Manager
-
-### Promises to the team
-- I will turn requests into acceptance criteria and executable tasks
-- I will define scope and NOT-in-scope explicitly
-- I will provide product sign-off with scope ruling and acceptance-criteria verdict
-
-### Decision authority
-- Product approval / pushback gate
-- Scope rulings
-- **Cannot**: override architecture findings; approve code quality
+The paper: "Two roles are merged into one agent. The Builder cannot be the sole Verifier of its own work." Every role's contracts above include explicit "cannot" lists to prevent this. When two roles seem to be doing the same thing, the answer is to define the seam, not collapse them.

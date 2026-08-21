@@ -1,75 +1,50 @@
 {
-  "$schema": "https://pi.dev/schema/agents-team.json",
+  "schemaVersion": 4,
+  "scaffoldVersion": 4,
   "enabled": true,
   "routingMode": "team",
-  "scaffoldVersion": 2,
   "workerAccess": {
     "allowPathsOutsideProject": false
   },
+  "display": {
+    "cost": true
+  },
   "roles": {
-    "team-lead": {
+    "dispatcher": {
+      "whenToUse": "Use for Stage 2 (Routing and assignment) of the seven-stage lifecycle — classify the goal, set priority, record ownership and confidence. The paper names this role first; no goal skips the dispatch.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/team-lead.md"
+      "prompt": ".pi-team/prompts/agents/dispatcher.md"
     },
-    "principal-architect": {
+    "researcher": {
+      "whenToUse": "Use for Stage 3 (Context gathering) when uncertainty is high — reduce uncertainty before a decision lands, surface alternatives with trade-offs, land findings in the durable record. The paper: the Researcher leads when uncertainty is high.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/principal-architect.md"
+      "prompt": ".pi-team/prompts/agents/researcher.md"
     },
-    "sceptical-architect": {
+    "builder": {
+      "whenToUse": "Use for Stage 4 (Action) when the goal is to produce a durable artefact — code, document, schema, configuration, dataset. Self-validate before handing off to the Verifier.",
+      "model": "default",
+      "thinkingLevel": "medium",
+      "prompt": ".pi-team/prompts/agents/builder.md"
+    },
+    "runtime": {
+      "whenToUse": "Use for Stage 4 (Action) when the goal is to operate a live system — deploy, migrate, scale, restart, configure. Must hold a tested rollback plan and stay inside the safe tier.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/sceptical-architect.md"
+      "prompt": ".pi-team/prompts/agents/runtime.md"
     },
-    "security-reviewer": {
+    "verifier": {
+      "whenToUse": "Use for Stage 5 (Verification) — independent validation gate before integration or deployment. Define the green gate, re-run evidence where possible, post a verdict. The paper: a verifier who always passes is not a verifier.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/security-reviewer.md"
+      "prompt": ".pi-team/prompts/agents/verifier.md"
     },
-    "integrator": {
+    "archivist": {
+      "whenToUse": "Use for Stage 6 (Recording and archival) and the ownership-transfer half of Stage 7 (Hand-off or closure) — append-only durable record, index for retrieval, surface recurring lessons as skills.",
+      "model": "default",
       "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/integrator.md"
-    },
-    "backend": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/backend.md"
-    },
-    "frontend": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/frontend.md"
-    },
-    "qa": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/qa.md"
-    },
-    "reviewer": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/reviewer.md"
-    },
-    "product-manager": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/product-manager.md"
-    },
-    "explorer": {
-      "thinkingLevel": "low",
-      "promptPath": ".pi-team/prompts/agents/explorer.md"
-    },
-    "fixer": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/fixer.md"
-    },
-    "librarian": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/librarian.md"
-    },
-    "observer": {
-      "thinkingLevel": "low",
-      "promptPath": ".pi-team/prompts/agents/observer.md"
-    },
-    "oracle": {
-      "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/oracle.md"
-    },
-    "designer": {
-      "thinkingLevel": "medium",
-      "promptPath": ".pi-team/prompts/agents/designer.md"
+      "prompt": ".pi-team/prompts/agents/archivist.md"
     }
   }
 }

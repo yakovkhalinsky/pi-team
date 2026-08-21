@@ -1,129 +1,46 @@
 {
-  "schemaVersion": 1,
-  "task": {
-    "statuses": {
-      "Planned": {
-        "owner": "dispatcher",
-        "transitions": ["Active"],
-        "kind": "queued",
-        "tool": {
-          "Markdown": "ToDo",
-          "Linear": "Backlog",
-          "Jira": "To Do",
-          "GitHubIssues": "Open"
-        }
-      },
-      "Active": {
-        "owner": "implementer",
-        "transitions": ["Review", "Planned", "Blocked"],
-        "kind": "active",
-        "tool": {
-          "Markdown": "In Progress",
-          "Linear": "In Progress",
-          "Jira": "In Progress",
-          "GitHubIssues": "In Progress"
-        }
-      },
-      "Review": {
-        "owner": "reviewer",
-        "transitions": ["Planned", "Ready to deploy"],
-        "kind": "review",
-        "tool": {
-          "Markdown": "In Review",
-          "Linear": "In Review",
-          "Jira": "In Review",
-          "GitHubIssues": "In Review"
-        }
-      },
-      "Ready to deploy": {
-        "owner": "integrator",
-        "transitions": [],
-        "kind": "terminal",
-        "tool": {
-          "Markdown": "Ready for production",
-          "Linear": "Ready for production",
-          "Jira": "Done",
-          "GitHubIssues": "Closed"
-        }
-      },
-      "Blocked": {
-        "owner": "human",
-        "transitions": ["Planned"],
-        "kind": "blocked",
-        "tool": {
-          "Markdown": "Blocked",
-          "Linear": "Blocked",
-          "Jira": "Blocked",
-          "GitHubIssues": "Open"
-        }
-      }
-    },
-    "initial": "Planned",
-    "terminal": ["Ready to deploy"]
+  "schemaVersion": 2,
+  "lifecycle": {
+    "stages": [
+      { "id": "goal-receipt",          "name": "Goal receipt",            "owner": "team-lead",   "kind": "queued" },
+      { "id": "routing-and-assignment","name": "Routing and assignment",  "owner": "dispatcher",  "kind": "queued" },
+      { "id": "context-gathering",     "name": "Context gathering",       "owner": "researcher",  "kind": "active" },
+      { "id": "action",                "name": "Action",                  "owner": "builder|runtime", "kind": "active" },
+      { "id": "verification",          "name": "Verification",            "owner": "verifier",    "kind": "review" },
+      { "id": "recording-and-archival","name": "Recording and archival",  "owner": "archivist",   "kind": "active" },
+      { "id": "hand-off-or-closure",   "name": "Hand-off or closure",     "owner": "team-lead",   "kind": "terminal" }
+    ],
+    "transitions": [
+      { "from": "goal-receipt",            "to": "routing-and-assignment" },
+      { "from": "routing-and-assignment",  "to": "context-gathering" },
+      { "from": "routing-and-assignment",  "to": "action" },
+      { "from": "context-gathering",       "to": "action" },
+      { "from": "action",                  "to": "verification" },
+      { "from": "action",                  "to": "routing-and-assignment" },
+      { "from": "verification",            "to": "recording-and-archival" },
+      { "from": "verification",            "to": "action" },
+      { "from": "verification",            "to": "routing-and-assignment" },
+      { "from": "recording-and-archival",  "to": "hand-off-or-closure" }
+    ],
+    "initial": "goal-receipt",
+    "terminal": ["hand-off-or-closure"]
   },
-  "feature": {
-    "statuses": {
-      "Planned": {
-        "owner": "team-lead",
-        "transitions": ["Active"],
-        "kind": "queued",
-        "tool": {
-          "Markdown": "Planned",
-          "Linear": "Backlog",
-          "Jira": "To Do",
-          "GitHubIssues": "Open"
-        }
-      },
-      "Active": {
-        "owner": "team-lead",
-        "transitions": ["Resolved"],
-        "kind": "active",
-        "tool": {
-          "Markdown": "Active",
-          "Linear": "In Progress",
-          "Jira": "In Progress",
-          "GitHubIssues": "In Progress"
-        }
-      },
-      "Resolved": {
-        "owner": "release-executor",
-        "transitions": [],
-        "kind": "terminal",
-        "tool": {
-          "Markdown": "Live",
-          "Linear": "Done",
-          "Jira": "Done",
-          "GitHubIssues": "Closed"
-        }
-      }
-    },
-    "initial": "Planned",
-    "terminal": ["Resolved"]
+  "roles": {
+    "team-lead":   { "stages": ["goal-receipt", "hand-off-or-closure"] },
+    "dispatcher":  { "stages": ["routing-and-assignment"] },
+    "researcher":  { "stages": ["context-gathering"] },
+    "builder":     { "stages": ["action"] },
+    "runtime":     { "stages": ["action"] },
+    "verifier":    { "stages": ["verification"] },
+    "archivist":   { "stages": ["recording-and-archival"] }
   },
-  "markers": {
-    "[design-note]": ["backend", "frontend"],
-    "[design-approved]": ["principal-architect"],
-    "[design-pushback]": ["principal-architect"],
-    "[sceptical-design-approved]": ["sceptical-architect"],
-    "[sceptical-design-pushback]": ["sceptical-architect"],
-    "[dependency-hold]": ["team-lead"],
-    "[resume-review]": ["team-lead"],
-    "[resume-plan]": ["team-lead"],
-    "[api-ready]": ["backend"],
-    "[divergence]": ["backend", "frontend"],
-    "[review-request]": ["backend", "frontend"],
-    "[review-findings]": ["reviewer", "qa", "team-lead", "principal-architect", "sceptical-architect", "security-reviewer"],
-    "[review-approval]": ["reviewer", "qa"],
-    "[team-lead-approval]": ["team-lead"],
-    "[architecture-approval]": ["principal-architect"],
-    "[sceptical-architecture-approval]": ["sceptical-architect"],
-    "[security-approval]": ["security-reviewer"],
-    "[product-approval]": ["product-manager", "team-lead"],
-    "[product-pushback]": ["product-manager", "team-lead"],
-    "[handoff]": ["team-lead"],
-    "[andon]": ["backend", "frontend", "qa", "reviewer", "principal-architect", "sceptical-architect", "security-reviewer", "integrator", "team-lead", "product-manager"],
-    "[escalation]": ["team-lead"],
-    "[progress]": ["dispatcher"],
-    "[digest]": ["dispatcher"]
-  }
+  "anti-patterns": [
+    "role-collapse",
+    "missing-dispatcher",
+    "verifiability-gap",
+    "memory-blindness",
+    "skipped-researcher",
+    "runtime-without-rollback",
+    "archivist-as-secretary"
+  ]
 }

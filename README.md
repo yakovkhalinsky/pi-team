@@ -1,15 +1,15 @@
 # Pi Team
 
-A comprehensive agentic team setup for the [pi.dev](https://pi.dev) coding agent harness, implementing the [Agentic Team Protocol](https://yakov.khalinsky.com/agentic-team-protocol/) — a harness-agnostic protocol for role-based agent teams.
+A comprehensive agentic team setup for the [pi.dev](https://pi.dev) coding agent harness, implementing the [Agentic Team Protocol](https://yakov.khalinsky.com/agentic-team-protocol/papers/01-protocol/) — a harness-agnostic protocol whose operating contracts make a team of agents coherent enough to debug when something goes wrong.
 
 ## What this gives you
 
-- **Role-based agent team** running inside pi.dev's orchestrator-worker model
-- **Six specialised roles** with explicit contracts, decision rights, and escalation paths
-- **Seven-stage task lifecycle** from intake to delivery with structured coordination markers
-- **Independent review board** — no agent approves its own work
-- **Team charter** template with ratification rules
-- **Decision and escalation** framework with andon cord support
+- **Six paper-aligned role contracts** — Dispatcher, Builder, Runtime, Verifier, Researcher, Archivist — with explicit "promises," decision authority, "cannot," and failure modes for each
+- **Seven-stage task lifecycle** — Goal receipt → Routing → Context gathering → Action → Verification → Recording → Hand-off or closure — with the only optional stage explicitly identified (Stage 3)
+- **Append-only durable record** — corrections are new entries with `supersedes:`, never edits; the Archivist enforces the invariant
+- **Identity discipline** — every comment signed by its role name verbatim; the Dispatcher enforces marker routing
+- **Protected-tier escalation** — production instances, secrets, IAM, DNS, certificates, backups, logs, force-push are explicitly outside what the team can authorise without human approval
+- **Anti-pattern visibility** — the seven anti-patterns the paper names (role collapse, missing dispatcher, verifiability gap, memory blindness, skipped researcher, runtime without rollback, archivist as secretary) are surfaced in every charter and every prompt
 - **One-command installer** that scaffolds the full setup into any project
 
 ## Quick start
@@ -25,79 +25,116 @@ cd pi-team && ./install.sh --target /path/to/your/project
 
 The installer will:
 
-1. Verify prerequisites (`pi`, `node`, `git`)
+1. Verify prerequisites (`pi`, `node` ≥ 22.19.0, `git`)
 2. Install the `pi-agents-team` extension (if not already present)
-3. Scaffold `.pi/agent/agents-team.json` with all protocol roles
+3. Scaffold `.pi/agent/agents-team.json` with the six paper roles, schema v4, and `whenToUse` trigger sentences
 4. Copy prompts, reference docs, team presets, and config templates
-5. Add `.pi-team/` to your project `.gitignore`
+5. Add `.pi-team/workspace/` and `.pi-team/.teamwork/` to your project `.gitignore` (runtime artefacts only — prompts and reference docs stay tracked)
 6. Print next-step instructions
 
 ## Roles
 
-| Role | Profile name | Thinking | Responsibility |
+The paper defines exactly six role contracts (§3). There is no seventh protocol role. When a goal needs a capability the six cannot supply, the Builder or Runtime consumes tools available in their harness.
+
+### The six paper roles
+
+| Role | Profile name | Thinking | Owns lifecycle stage |
 |---|---|---|---|
-| **Team Lead** | `team-lead` | high | Coordinates the team, supervises, recovers stuck agents, escalates to human |
-| **Principal Architect** | `principal-architect` | high | Owns the primary architecture position, gates design, reviews conformance |
-| **Sceptical Architect** | `sceptical-architect` | high | Independently challenges design and review — blind-first assessments |
-| **Security Reviewer** | `security-reviewer` | high | Independent security sign-off, threat modelling, abuse-path analysis |
-| **Integrator** | `integrator` | medium | Only role that writes the feature branch; serialised merge and validation |
-| **Backend** | `backend` | medium | Backend implementation in isolated worktrees |
-| **Frontend** | `frontend` | medium | Frontend implementation in isolated worktrees |
-| **QA** | `qa` | medium | Quality assurance, test coverage, regression validation |
-| **Reviewer** | `reviewer` | medium | Independent code review against exact packages |
-| **Product Manager** | `product-manager` | medium | Scope, acceptance criteria, product sign-off |
-| **Explorer** | `explorer` | low | Fast investigation, codebase mapping, dependency tracing |
-| **Fixer** | `fixer` | medium | Bug reproduction and fix implementation |
-| **Librarian** | `librarian` | medium | Documentation, knowledge artefacts, contract registry |
-| **Observer** | `observer` | low | Monitoring, status reporting, health checks |
-| **Oracle** | `oracle` | high | Research, analysis, feasibility studies |
-| **Designer** | `designer` | medium | UI/UX design, interface specifications |
+| **Dispatcher** | `dispatcher` | high | Stage 2 — Routing and assignment |
+| **Researcher** | `researcher` | high | Stage 3 — Context gathering (when uncertainty is high) |
+| **Builder** | `builder` | medium | Stage 4 — Action (artefact production) |
+| **Runtime** | `runtime` | high | Stage 4 — Action (live-system execution) |
+| **Verifier** | `verifier` | high | Stage 5 — Verification |
+| **Archivist** | `archivist` | medium | Stage 6 — Recording and archival; ownership-transfer half of Stage 7 |
 
-## Task lifecycle
+The **Team Lead** is the pi.dev orchestrator (your main session) and hosts Stage 1 (Goal receipt) and the closure half of Stage 7 (Hand-off or closure). It is not one of the six paper roles — it is the harness instantiation that holds them together.
+
+## The seven-stage task lifecycle
 
 ```
-Intake → Triage → Planning → Design Gate → Implementation → Review → Delivery
-                                                ↑                  │
-                                                └── findings ───────┘
+1. Goal receipt            (Team Lead — orchestrator)
+2. Routing and assignment  (Dispatcher)
+3. Context gathering       (Researcher when uncertainty is high; otherwise goal owner consults Archivist)
+4. Action                  (Builder for artefacts, Runtime for live systems)
+5. Verification            (Verifier)
+6. Recording and archival  (Archivist)
+7. Hand-off or closure     (Archivist records ownership transfer; Team Lead closes or transfers)
 ```
 
-Each stage has explicit entry/exit criteria, owned artefacts, and structured coordination markers. See [`reference/task-lifecycle.md`](reference/task-lifecycle.md).
+Skipping a stage is an anti-pattern the paper calls out: "the most expensive mistakes we have made came from treating context gathering or verification as optional." The only optional stage is Stage 3 — the paper is explicit: "the Researcher leads when uncertainty is high; otherwise the owner consults the Archivist."
+
+See [`reference/task-lifecycle.md`](reference/task-lifecycle.md).
+
+## Coordination markers
+
+The paper does not define a marker grammar; it says (§5.3): "we do not just record results; we record decisions." The project extends the paper with a marker grammar so cross-role hand-offs are grep-able in the durable record:
+
+`[goal-received]` `[routing]` `[context-gathering]` `[skip-context-gathering]` `[action]` `[api-ready]` `[verdict]` `[recorded]` `[closure]` `[handoff]` `[andon]` `[escalation]`
+
+Marker routing is enforced — the Dispatcher refuses a marker whose claimed signer is not allowed for that marker. **No role approves its own work.** When a marker's only allowed role is the task's own implementer, an independent verifier substitutes; none available → `[andon]`.
+
+See [`reference/markers.md`](reference/markers.md).
 
 ## Team presets
 
-| Preset | Roster | Use when |
+The paper does not enumerate presets; it describes one six-role operations fleet in §1. The project provides six presets, each choosing which of the six paper roles are active:
+
+| Preset | Active roles | Use when |
 |---|---|---|
-| `full-stack` | Lead · Principal Architect · Sceptical Architect · PM · Full Stack · QA | Features cutting through schema, API, and UI |
-| `deep-backend` | Lead · Principal Backend Architect · Sceptical Architect · PM · Staff Engineer · QA | Domain logic, data models, APIs, performance |
-| `deep-frontend` | Lead · Principal Frontend Architect · Sceptical Architect · PM · Frontend Engineer · QA | UI architecture, client state, design systems |
-| `deep-security` | Lead · Principal Security Architect · Sceptical Architect · Security Engineer · PM · QA | Security features and hardening |
-| `deep-infra` | Lead · Principal Infra Architect · Sceptical Architect · Security · PM · Cloud Engineer · SRE · QA | Cloud infrastructure, IaC, reliability |
-| `deep-llm` | Lead · Principal LLM Architect · Sceptical LLM Architect · PM · LLM Engineer · Staff Backend · Full Stack · QA | LLM systems, RAG, evaluation, inference |
+| `full-fleet` | All six + Team Lead | Any goal that touches more than one paper role — the default |
+| `research-driven` | Dispatcher, Researcher, Builder, Verifier, Archivist + Team Lead | Uncertainty is high before any decision lands; Stage 3 runs mandatory |
+| `builder-fleet` | Dispatcher, Researcher, Builder, Verifier, Archivist + Team Lead | Producing durable artefacts without live-system changes |
+| `runtime-fleet` | All six + Team Lead | Operating live systems; rollback plan must be in the durable record before execution |
+| `verification-fleet` | Dispatcher, Researcher, Verifier, Archivist + Team Lead | Independent acceptance gate on existing work |
+| `archive-fleet` | Dispatcher, Researcher, Archivist + Team Lead | Maintaining the durable record; ownership transfer; skill promotion |
+
+## Protected tier (paper §8 governance implication)
+
+The following are explicitly outside what the team can authorise without human approval:
+
+- Production instances, clusters, storage, network, DNS, certificates, keys, backups, logs
+- IAM, secrets, force-push, history rewrite
+- Database / schema drops or truncation
+
+The Dispatcher refuses to route any goal whose target is the protected tier without explicit human approval.
+
+## Anti-patterns the paper names
+
+The paper enumerates seven anti-patterns (§6). Every charter and every prompt surfaces them so they are visible before they become incidents:
+
+- **Role collapse.** Two roles merged into one agent. The Builder cannot be the sole Verifier of its own work.
+- **Missing Dispatcher.** Tasks assigned by implicit convention. Missed hand-offs and duplicated work.
+- **Verifiability gap.** The Verifier exists on paper but cannot inspect.
+- **Memory blindness.** The Archivist is disconnected; mistakes repeat.
+- **Skipped Researcher.** Decisions without options or trade-offs.
+- **Runtime without rollback.** Live changes lack a tested recovery path.
+- **Archivist as secretary.** Copies chat logs instead of authoring canonical records.
 
 ## How it works
 
 Pi Team uses pi.dev's native orchestrator-worker RPC model:
 
-1. The **orchestrator** (your main pi session) acts as Team Lead
-2. Work is **delegated** to background RPC workers, each running a role-specific prompt
+1. The **orchestrator** (your main pi session) acts as Team Lead and hosts Stages 1 and 7
+2. Each paper role runs as a background RPC worker via `delegate_task`
 3. Workers return a compact `<final_answer>` block — the orchestrator never sees full transcripts
 4. The orchestrator **waits** (zero-token) for workers, answers **relay questions** mid-flight, and synthesises results
-5. Coordination happens through **structured markers** in task comments and the team workspace
+5. The durable record carries every stage entry with append-only semantics
 
 ```
 ┌─────────────────────────────────────────────────┐
 │                 Orchestrator                      │
-│              (Team Lead / user)                   │
+│            (Team Lead / user)                     │
 │                                                   │
-│  delegate_task ──► ┌──────────────┐               │
-│                    │   Worker 1   │  (architect)  │
-│  wait_for_agents ──►├──────────────┤               │
-│                    │   Worker 2   │  (implement)  │
-│  agent_message  ──►├──────────────┤               │
-│                    │   Worker 3   │  (review)     │
-│  agent_result   ◄──┴──────────────┘               │
+│  Stage 1: Goal receipt  ◄──► User                │
 │                                                   │
-│  synthesise ──► user-facing answer                │
+│  Stage 2: Routing        ──►  Dispatcher          │
+│  Stage 3: Context (opt)  ──►  Researcher          │
+│  Stage 4: Action         ──►  Builder | Runtime   │
+│  Stage 5: Verification   ──►  Verifier            │
+│  Stage 6: Recording      ──►  Archivist           │
+│  Stage 7: Closure        ◄──  Archivist handoff   │
+│                                                   │
+│  durable record ◄── append-only                  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -107,21 +144,39 @@ After installation, configure your team in `.pi/agent/agents-team.json`:
 
 ```json
 {
+  "schemaVersion": 4,
+  "scaffoldVersion": 4,
   "enabled": true,
   "routingMode": "team",
+  "workerAccess": {
+    "allowPathsOutsideProject": false
+  },
+  "display": {
+    "cost": true
+  },
   "roles": {
-    "team-lead": {
+    "dispatcher": {
+      "whenToUse": "Use for Stage 2 (Routing and assignment) — classify the goal, set priority, record ownership and confidence.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/team-lead.md"
+      "prompt": ".pi-team/prompts/agents/dispatcher.md"
     },
-    "principal-architect": {
+    "researcher": {
+      "whenToUse": "Use for Stage 3 (Context gathering) when uncertainty is high — reduce uncertainty before a decision lands.",
+      "model": "default",
       "thinkingLevel": "high",
-      "promptPath": ".pi-team/prompts/agents/principal-architect.md"
+      "prompt": ".pi-team/prompts/agents/researcher.md"
     }
-    // ... see full config after install
+    // ... builder, runtime, verifier, archivist
   }
 }
 ```
+
+> **Schema v4 notes:** `schemaVersion: 4` is required. Per-role `promptPath` was renamed to `prompt` (a string is treated as a project-relative path to your own `.md`; use `"default"` for the built-in prompt). Optional per-role knobs:
+> - `whenToUse` — trigger sentence shown to the orchestrator (e.g. "Use for Stage 2 ...")
+> - `model` — `"default"` (inherit) or `"provider/model-id"`
+> - `thinkingLevel` — `off | minimal | low | medium | high | xhigh | max`
+> - `access` — `tools`, `write`, `pathScope`, `extensionMode`, `extensions`, `canSpawnWorkers`
 
 Toggle between team and solo mode:
 
@@ -141,38 +196,47 @@ pi /team-enable off    # solo mode (standard pi without workers)
 | `/team-enable on\|off` | Toggle between team and solo mode |
 | `/team-init [global\|local]` | Scaffold config with built-in roles |
 
+Helper scripts in `.pi-team/bin/` add protocol-aware workspace management:
+
+```bash
+.pi-team/bin/pi-team-init.sh <team-name> <feature-id> [preset]   # Scaffold CHARTER, RECORD, SKILLS, RUNBOOKS, ESCALATIONS
+.pi-team/bin/pi-team-status.sh                                  # Show team workspace status, charter ratification, durable-record health
+.pi-team/bin/pi-team-cleanup.sh <team-name>                     # Archive-and-remove a team workspace after feature completion
+```
+
 ## Project structure after install
 
 ```
 your-project/
 ├── .pi/
 │   └── agent/
-│       └── agents-team.json        # Pi Agents Team role config
-├── .pi-team/
-│   ├── prompts/
-│   │   ├── orchestrator.md          # Orchestrator contract
-│   │   └── agents/                  # 16 role-specific prompts
-│   ├── reference/                   # Protocol documentation
-│   ├── teams/                       # 6 preset team definitions
-│   ├── config/
-│   │   ├── team.json                # Default role config
-│   │   ├── statuses.json            # Status state machine
-│   │   └── charter.template.md      # Team charter template
-│   └── bin/                         # Helper scripts
-└── .gitignore                       # Updated with .pi-team/
+│       └── agents-team.json        # Pi Agents Team role config (schema v4)
+└── .pi-team/
+    ├── prompts/
+    │   ├── orchestrator.md          # Team Lead contract (Stage 1 + Stage 7)
+    │   └── agents/                  # Six paper role prompts
+    ├── reference/                   # 7 protocol documents
+    ├── teams/                       # 6 paper-aligned presets
+    ├── config/
+    │   ├── team.json                # Default role config (canonical)
+    │   ├── statuses.json            # Seven-stage lifecycle + transitions
+    │   └── charter.template.md      # Team charter template
+    └── bin/                         # Helper scripts
 ```
+
+`.pi-team/workspace/` and `.pi-team/.teamwork/` are runtime-only and git-ignored.
 
 ## Documentation
 
 | Document | Answers |
 |---|---|
-| [`reference/protocol.md`](reference/protocol.md) | What is the core protocol and its invariants? |
-| [`reference/role-contracts.md`](reference/role-contracts.md) | What does each role promise to the others? |
-| [`reference/task-lifecycle.md`](reference/task-lifecycle.md) | How does a goal pass through seven stages? |
+| [`reference/protocol.md`](reference/protocol.md) | What is the core protocol and its six role contracts? |
+| [`reference/role-contracts.md`](reference/role-contracts.md) | What does each role promise, decide, and cannot decide? |
+| [`reference/task-lifecycle.md`](reference/task-lifecycle.md) | How does a goal pass through the seven stages? |
+| [`reference/markers.md`](reference/markers.md) | What markers coordinate cross-role hand-offs in the durable record? |
+| [`reference/decision-escalation.md`](reference/decision-escalation.md) | Who decides what, and when to escalate? |
 | [`reference/harness-patterns.md`](reference/harness-patterns.md) | How is the protocol instantiated on pi.dev? |
 | [`reference/team-charter.md`](reference/team-charter.md) | How is a team charter created and ratified? |
-| [`reference/decision-escalation.md`](reference/decision-escalation.md) | Who decides what, and when to escalate? |
-| [`reference/markers.md`](reference/markers.md) | What structured markers coordinate the team? |
 
 ## Requirements
 

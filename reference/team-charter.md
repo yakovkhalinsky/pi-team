@@ -1,113 +1,44 @@
 # Team Charter
 
-Charter template and ratification rules for an agentic team.
+A charter binds a team of agents to a shared operating contract. Per the paper §8, a charter names "identity, mission, boundaries, roles, decision rights, dependencies, runbooks, skills, and retirement condition." Ratification happens before work begins and is the reference point when something goes wrong.
 
-## Purpose
+The charter template at `.pi-team/config/charter.template.md` is the project's canonical instantiation.
 
-A team charter is the founding document that binds a team of agents to a shared operating contract. It is ratified before work begins and is the reference point when something goes wrong.
+## The paper's charter content (§8)
 
-## Charter template
-
-```markdown
-# Team Charter: [Team Name]
-
-## Feature
-[Feature ID and one-line description]
-
-## Team preset
-[preset-name: full-stack | deep-backend | deep-frontend | deep-security | deep-infra | deep-llm]
-
-## Roster
-
-| Role | Specialised name | Protocol mapping | Model profile |
-|---|---|---|---|
-| Team Lead | [name] | team-lead | [pi profile] |
-| Principal Architect | [name] | principal-architect | [pi profile] |
-| Sceptical Architect | [name] | sceptical-architect | [pi profile] |
-| [additional roles...] | | | |
-
-## Scope
-
-### In scope
-- [item 1]
-- [item 2]
-
-### NOT in scope
-- [item 1]
-- [item 2]
-
-## Acceptance criteria
-- [ ] [criterion 1 — measurable]
-- [ ] [criterion 2 — measurable]
-
-## Execution mode
-- [ ] Sequential (default)
-- [ ] Parallel (MAX_ACTIVE_IMPLEMENTERS: [N])
-
-## Review gates
-- [ ] Core: Team Lead + Principal Architect + Sceptical Architect (always)
-- [ ] Security (required for: [tasks])
-- [ ] QA (required for: [tasks])
-
-## Validation commands
-- VALIDATE_BUILD: [command or null]
-- VALIDATE_TEST: [command or null]
-- VALIDATE_LINT: [command or null]
-- VALIDATE_FORMAT: [command or null]
-- VALIDATE_SCRIPT: [command or null]
-
-## Baseline
-- Test count: [N passed, N failed, N skipped]
-- Known failures: [list with cause]
-- Baseline commit: [SHA]
-
-## Communication
-- Tracker: [Markdown | Linear | Jira | GitHub Issues]
-- Write mode: [broker | all]
-- Stuck threshold: [15] minutes
-- Escalate after: [2] failed recovery rungs
+- **Identity** — what this team is, what it owns, who charters it
+- **Mission** — what "done" means for this team
+- **Boundaries** — in scope, out of scope, protected tier (the things no team member authorises without human approval)
+- **Roles** — which of the six paper roles are active on this team
+- **Decision rights** — what each role decides and what it cannot decide
+- **Dependencies** — external systems, packages, contracts the team relies on
+- **Runbooks** — rollback, recovery, closure procedures
+- **Skills** — recurring lessons promoted from the durable record
+- **Retirement condition** — what ends this charter
 
 ## Ratification
-- [ ] Product Manager approved scope
-- [ ] Principal Architect approved plan
-- [ ] Sceptical Architect challenged and cleared
-- [ ] Team Lead confirmed resources and preset
 
-## Signatures
-- Team Lead: — [name], [date]
-- Principal Architect: — [name], [date]
-- Sceptical Architect: — [name], [date]
-- Product Manager: — [name], [date]
-```
+The paper §8: "Governance separates the Founders' Circle, which charters and ratifies, from Anchor Operations, which runs product teams inside guardrails."
 
-## Ratification rules
+Ratification steps:
 
-1. **Product approval first.** The Product Manager (or Team Lead where no PM exists) must approve scope and acceptance criteria before architecture review.
+1. **Product approval** (or Team Lead where no PM exists): scope, mission, boundaries
+2. **Dispatcher** approved routing: which stages run, which are optional
+3. **Researcher** confirmed information sources and uncertainty threshold
+4. **Builder / Runtime** confirmed acceptance criteria for their stage
+5. **Verifier** confirmed gate criteria for each stage transition
+6. **Archivist** confirmed workspace structure and retention policy
 
-2. **Both architects must ratify.** The Principal Architect and Sceptical Architect independently review the charter. Both must sign. A pushback from either sends it back for revision.
-
-3. **Blind-first challenge.** The Sceptical Architect writes their provisional assessment before reading the Principal Architect's verdict.
-
-4. **Binding conditions.** Any conditions attached to ratification (e.g., "security review required for auth tasks") are recorded in the charter and enforced by the dispatcher.
-
-5. **No work before ratification.** No task may be claimed or implemented until the charter is ratified. The dispatcher refuses claims against an unratified charter.
-
-6. **Amendment requires re-ratification.** Any change to scope, acceptance criteria, execution mode, or review gates requires fresh signatures from all original ratifiers.
-
-7. **Charter is evidence, not authority.** The charter is the founding document, but the tracker remains the single source of durable truth. A charter condition that is not reflected in tracker state is not enforceable by automation.
-
-## When to create a charter
-
-- **Always** for multi-task features delivered by a team
-- **Optional** for single-task work in solo mode (the task description serves as a mini-charter)
-- **Mandatory** before parallel execution — the charter's execution mode and review gates are validated by the pre-parallel checklist
+Each signature is itself a marker — appended to the durable record by the role that signs.
 
 ## Charter storage
 
-The charter is committed to the team workspace:
+The charter is committed to the team workspace at `.pi-team/workspace/<team-name>/CHARTER.md`. It is cited by every stage entry the Archivist appends; the Archivist refuses to record a stage entry whose charter has not been ratified.
 
-```
-.pi-team/workspace/<team-name>/CHARTER.md
-```
+## When to amend
 
-It is referenced by task packets and review packages. The dispatcher validates charter ratification status before claiming the first task.
+Any change to scope, mission, boundaries, decision rights, dependencies, runbooks, skills, or retirement condition requires fresh signatures from all original ratifiers. The amendment is itself a new entry in the durable record with `supersedes: <prior-charter-id>`.
+
+## Charter as evidence, not authority
+
+The charter is the founding document, but the durable record remains the source of truth. A charter condition that is not reflected in the durable record is not enforceable by automation. The Dispatcher enforces charter routing against record entries, not against charter text alone.
