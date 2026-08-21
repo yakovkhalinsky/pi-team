@@ -1,0 +1,75 @@
+{
+  "$schema": "https://pi.dev/schema/agents-team.json",
+  "enabled": true,
+  "routingMode": "team",
+  "scaffoldVersion": 2,
+  "workerAccess": {
+    "allowPathsOutsideProject": false
+  },
+  "roles": {
+    "team-lead": {
+      "thinkingLevel": "high",
+      "promptPath": ".pi-team/prompts/agents/team-lead.md"
+    },
+    "principal-architect": {
+      "thinkingLevel": "high",
+      "promptPath": ".pi-team/prompts/agents/principal-architect.md"
+    },
+    "sceptical-architect": {
+      "thinkingLevel": "high",
+      "promptPath": ".pi-team/prompts/agents/sceptical-architect.md"
+    },
+    "security-reviewer": {
+      "thinkingLevel": "high",
+      "promptPath": ".pi-team/prompts/agents/security-reviewer.md"
+    },
+    "integrator": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/integrator.md"
+    },
+    "backend": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/backend.md"
+    },
+    "frontend": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/frontend.md"
+    },
+    "qa": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/qa.md"
+    },
+    "reviewer": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/reviewer.md"
+    },
+    "product-manager": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/product-manager.md"
+    },
+    "explorer": {
+      "thinkingLevel": "low",
+      "promptPath": ".pi-team/prompts/agents/explorer.md"
+    },
+    "fixer": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/fixer.md"
+    },
+    "librarian": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/librarian.md"
+    },
+    "observer": {
+      "thinkingLevel": "low",
+      "promptPath": ".pi-team/prompts/agents/observer.md"
+    },
+    "oracle": {
+      "thinkingLevel": "high",
+      "promptPath": ".pi-team/prompts/agents/oracle.md"
+    },
+    "designer": {
+      "thinkingLevel": "medium",
+      "promptPath": ".pi-team/prompts/agents/designer.md"
+    }
+  }
+}
