@@ -162,23 +162,23 @@ function getProjectTrustDecisionForContext(ctx) {
 function isProjectConfigTrustedForContext(ctx) {
     return getProjectTrustDecisionForContext(ctx) ?? true;
 }
-function buildAtpContext(ctx, extra = {}) {
+function buildAtpContext(activeProjectConfig, ctx, extra = {}) {
     return {
         packageName: activeProjectConfig?.config?.orchestration?.packageName ?? DEFAULT_TEAM_CONFIG.orchestration.packageName,
         ...extra,
     };
 }
-function buildAtpRecorderOptions(signal) {
+function buildAtpRecorderOptions(activeProjectConfig, signal) {
     const memoryEnabled = activeProjectConfig?.config?.memory?.edenMemory?.enabled === true;
     if (!memoryEnabled)
         return undefined;
     return {
         env: process.env,
         signal,
-        edenOptions: buildEdenMemoryOptions(),
+        edenOptions: buildEdenMemoryOptions(activeProjectConfig),
     };
 }
-function buildEdenMemoryOptions() {
+function buildEdenMemoryOptions(activeProjectConfig) {
     const memoryConfig = activeProjectConfig?.config?.memory?.edenMemory;
     const envOptions = resolveEdenOptions(process.env);
     return {
@@ -193,11 +193,11 @@ function buildEdenMemoryOptions() {
         ...(typeof memoryConfig?.logLevel === "string" ? { logLevel: memoryConfig.logLevel } : {}),
     };
 }
-function recordAtpStage(stageRecorder, content, ctx, signal) {
-    const options = buildAtpRecorderOptions(signal);
+function recordAtpStage(activeProjectConfig, stageRecorder, content, ctx, signal) {
+    const options = buildAtpRecorderOptions(activeProjectConfig, signal);
     if (!options)
         return;
-    void stageRecorder(content, options, buildAtpContext(ctx));
+    void stageRecorder(content, options, buildAtpContext(activeProjectConfig, ctx));
 }
 function updateDelegateTaskProfileDescription(config) {
     const profileListSnapshot = config.profiles.map((profile) => profile.name);
@@ -942,11 +942,11 @@ export default function (pi) {
                         clearTimeout(notificationTimer);
                     notificationTimer = setTimeout(flushWorkerNotifications, 400);
                     const atpCtx = {
-                        ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, worktreePath: worker.worktreePath }),
+                        ...buildAtpContext(activeProjectConfig, activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, worktreePath: worker.worktreePath }),
                     };
-                    void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(), atpCtx);
+                    void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(activeProjectConfig), atpCtx);
                     if (worker.finalAnswer?.trim()) {
-                        void recordTerminalStageForProfile(worker.profileName, worker.finalAnswer.trim(), buildAtpRecorderOptions(), atpCtx);
+                        void recordTerminalStageForProfile(worker.profileName, worker.finalAnswer.trim(), buildAtpRecorderOptions(activeProjectConfig), atpCtx);
                     }
                 }
                 lastStatus.set(worker.workerId, worker.status);
@@ -962,8 +962,8 @@ export default function (pi) {
                 if (currRelays > prevRelays) {
                     const newest = worker.pendingRelayQuestions[worker.pendingRelayQuestions.length - 1];
                     if (newest?.question) {
-                        void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(), {
-                            ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency, worktreePath: worker.worktreePath }),
+                        void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(activeProjectConfig), {
+                            ...buildAtpContext(activeProjectConfig, activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency, worktreePath: worker.worktreePath }),
                         });
                     }
                 }
@@ -977,7 +977,7 @@ export default function (pi) {
                 || pruned.costUsd !== lastPrunedUsageTotals.costUsd;
             if (changed) {
                 Object.assign(lastPrunedUsageTotals, pruned);
-                void recordWorkerPrune(pruned.workers, pruned, buildAtpRecorderOptions(), buildAtpContext(activeContext));
+                void recordWorkerPrune(pruned.workers, pruned, buildAtpRecorderOptions(activeProjectConfig), buildAtpContext(activeProjectConfig, activeContext));
             }
         });
         const workerEvents = manager.workerManager;
@@ -1109,7 +1109,7 @@ export default function (pi) {
                 projectTrustRoot: projectTrusted === undefined ? undefined : activeProjectConfig.projectRoot ?? ctx.cwd,
                 reuseWorkerId: params.reuseWorkerId ?? undefined,
             }, signal);
-            recordAtpStage(recordRouting, `Routed to ${params.profileName}: ${params.title}`, ctx, signal);
+            recordAtpStage(activeProjectConfig, recordRouting, `Routed to ${params.profileName}: ${params.title}`, ctx, signal);
             teamState = teamManager.snapshot();
             renderUi(activeContext, teamState, spinnerFrame, activeProjectConfig.config, isTeamActive(activeProjectConfig), teamManager.routingMode, activeProjectConfig.displayCost);
             return {
@@ -1312,7 +1312,7 @@ export default function (pi) {
                 const missingEnv = getMissingRequiredEnvFields();
                 if (missingEnv.length > 0) {
                     const wizardResult = await runEnvWizard(ctx, false);
-                    const level = wizardResult.missingAfter.length > 0 ? "warning" : wizardResult.updated ? "info" : "warning";
+                    const level = wizardResult.missingAfter.length > 0 ? "warning" : "info";
                     ctx.ui.notify(wizardResult.report.join("\n"), level);
                 }
             }
@@ -1320,7 +1320,7 @@ export default function (pi) {
                 const noun = markedCount === 1 ? "worker" : "workers";
                 ctx.ui.notify(`Workers exited — ${markedCount} ${noun} restored from ${event.reason}; relaunch if needed.`, "warning");
             }
-            recordAtpStage(recordGoalReceipt, `Session started (${event.reason})`, ctx);
+            recordAtpStage(activeProjectConfig, recordGoalReceipt, `Session started (${event.reason})`, ctx);
         }
         finally {
             reloading = false;
@@ -1452,7 +1452,7 @@ export default function (pi) {
             detachTeamManagerListener(false);
             clearUi(ctx, activeProjectConfig.config);
             orchestratorWorking = false;
-            recordAtpStage(recordHandOffOrClosure, `Session shutting down`, ctx);
+            recordAtpStage(activeProjectConfig, recordHandOffOrClosure, `Session shutting down`, ctx);
             activeContext = undefined;
         }
     });

@@ -117,11 +117,11 @@ export async function runEnvWizard(ctx, force = false) {
   let entries = readEnvFile(envPath);
   const missingBefore = getMissingRequiredEnvFields(entries);
   const report = [];
-  report.push(existed ? `Found project .env at ${envPath}.` : `No project .env at ${envPath}.`);
+  report.push(existed ? `Project .env found at ${envPath}.` : `No project .env at ${envPath}.`);
   report.push(formatMissingFieldsReport(missingBefore));
 
   if (missingBefore.length === 0 && !force) {
-    report.push("Run /team-env --force to overwrite values, or edit the file by hand.");
+    report.push("Everything is already configured. Use /team-env --force to overwrite values, or edit the file by hand.");
     return { updated: false, envPath, missingBefore, missingAfter: [], report };
   }
 
@@ -215,7 +215,7 @@ export function registerTeamEnvCommand(pi) {
         const envPath = findProjectEnvPath(ctx.cwd);
         const entries = readEnvFile(envPath);
         const missing = getMissingRequiredEnvFields(entries);
-        const lines = [existsSync(envPath) ? `Found project .env at ${envPath}.` : `No project .env at ${envPath}.`, formatMissingFieldsReport(missing)];
+        const lines = [existsSync(envPath) ? `Project .env found at ${envPath}.` : `No project .env at ${envPath}.`, formatMissingFieldsReport(missing)];
         const text = lines.join("\n");
         if (ctx.ui) ctx.ui.notify(text, missing.length > 0 ? "warning" : "info");
         else console.log(text);
@@ -223,7 +223,10 @@ export function registerTeamEnvCommand(pi) {
       }
       const result = await runEnvWizard(ctx, parsed.force);
       const text = result.report.join("\n");
-      if (ctx.ui) ctx.ui.notify(text, result.missingAfter.length > 0 ? "warning" : result.updated ? "info" : "warning");
+      if (ctx.ui) {
+        const level = result.missingAfter.length > 0 ? "warning" : "info";
+        ctx.ui.notify(text, level);
+      }
       else console.log(text);
     },
   });

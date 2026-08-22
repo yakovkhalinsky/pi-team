@@ -168,4 +168,52 @@ describe("/team-env command", () => {
     const escaped = _testing.escapeEnvValue("line1\nline2\r");
     assert.equal(escaped, "line1\\nline2\\r");
   });
+
+  it("reports an already-complete .env at info level with positive wording", async () => {
+    const envPath = resolve(tmpDir, ".env");
+    writeFileSync(
+      envPath,
+      [
+        `${EDEN_ENV_FIELDS.BIN}=/fake-bin`,
+        `${EDEN_ENV_FIELDS.DB}=/db`,
+        `${EDEN_ENV_FIELDS.WORKSPACE_ID}=ws`,
+        `${EDEN_ENV_FIELDS.USER_ID}=user`,
+        `${EDEN_ENV_FIELDS.AGENT_ID}=agent`,
+        `${EDEN_ENV_FIELDS.SEMANTIC_SEARCH}=false`,
+        "",
+      ].join("\n"),
+    );
+    const pi = createMockPi();
+    registerTeamEnvCommand(pi);
+    const ctx = createCtx(tmpDir);
+    await pi.commands.get("team-env")!.handler("", ctx);
+    const notification = ctx.ui.notifyCalls[0];
+    assert.equal(notification.level, "info");
+    assert.ok(notification.message.includes("Project .env found at"), `unexpected message: ${notification.message}`);
+    assert.ok(notification.message.includes("Everything is already configured"), `unexpected message: ${notification.message}`);
+    assert.ok(notification.message.includes("All required eden-memory env fields are present"));
+  });
+
+  it("check mode reports a complete .env at info level", async () => {
+    const envPath = resolve(tmpDir, ".env");
+    writeFileSync(
+      envPath,
+      [
+        `${EDEN_ENV_FIELDS.BIN}=/fake-bin`,
+        `${EDEN_ENV_FIELDS.DB}=/db`,
+        `${EDEN_ENV_FIELDS.WORKSPACE_ID}=ws`,
+        `${EDEN_ENV_FIELDS.USER_ID}=user`,
+        `${EDEN_ENV_FIELDS.AGENT_ID}=agent`,
+        `${EDEN_ENV_FIELDS.SEMANTIC_SEARCH}=false`,
+        "",
+      ].join("\n"),
+    );
+    const pi = createMockPi();
+    registerTeamEnvCommand(pi);
+    const ctx = createCtx(tmpDir);
+    await pi.commands.get("team-env")!.handler("--check", ctx);
+    const notification = ctx.ui.notifyCalls[0];
+    assert.equal(notification.level, "info");
+    assert.ok(notification.message.includes("Project .env found at"));
+  });
 });
