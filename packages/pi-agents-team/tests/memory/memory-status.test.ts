@@ -67,6 +67,27 @@ describe("memory/memory-status", () => {
       assert.equal(tracker.status.healthy, false);
       assert.equal(tracker.status.lastError, "unreachable");
     });
+
+    it("caps health checks with a timeout", async () => {
+      let calls = 0;
+      const tracker = createMemoryStatusTracker({
+        enabled: true,
+        health: async (_options, _signal, timeoutMs) => {
+          calls += 1;
+          return new Promise((resolve) => {
+            setTimeout(() => resolve({ ok: true }), 60_000);
+          });
+        },
+        healthTimeoutMs: 50,
+        healthIntervalMs: 10,
+      });
+      tracker.startPolling();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      tracker.stopPolling();
+      assert.ok(calls >= 1, `expected at least one health call, got ${calls}`);
+      assert.equal(tracker.status.healthy, false);
+      assert.ok(tracker.status.lastError?.includes("timed out"), tracker.status.lastError);
+    });
   });
 
   describe("per-worker ATP lifecycle tracking", () => {

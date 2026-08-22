@@ -63,7 +63,8 @@ function buildIdentityArgs(options = {}) {
   return args;
 }
 
-function spawnEden(bin, subcommand, args, signal) {
+function spawnEden(bin, subcommand, args, options = {}) {
+  const { signal, timeoutMs = 10_000 } = options;
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       const error = new Error("Aborted");
@@ -71,6 +72,9 @@ function spawnEden(bin, subcommand, args, signal) {
       reject(error);
       return;
     }
+    let settled = false;
+    let timedOut = false;
+    let aborted = false;
     const child = spawn(bin, [subcommand, ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -82,16 +86,49 @@ function spawnEden(bin, subcommand, args, signal) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", (error) => {
-      reject(error);
-    });
-    child.on("close", (code) => {
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore cleanup failures.
+      }
+    }, timeoutMs);
+    if (typeof timeoutId.unref === "function") timeoutId.unref();
+
+    function cleanup() {
+      clearTimeout(timeoutId);
       if (signal) {
         signal.removeEventListener("abort", onAbort);
       }
-      resolve({ code, stdout, stderr });
+    }
+
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (timedOut) {
+        const error = new Error(`Eden-memory process timed out after ${timeoutMs}ms`);
+        error.name = "TimeoutError";
+        reject(error);
+      } else if (aborted) {
+        const error = new Error("Aborted");
+        error.name = "AbortError";
+        reject(error);
+      } else {
+        resolve({ code, stdout, stderr });
+      }
     });
     function onAbort() {
+      if (settled) return;
+      aborted = true;
       try {
         child.kill("SIGTERM");
       } catch {
@@ -171,7 +208,7 @@ function buildRememberContent(record) {
  * Errors are caught and returned as a result object so lifecycle callers never
  * throw on a failed memory write.
  */
-export async function rememberRecord(record, options = {}, signal) {
+export async function rememberRecord(record, options = {}, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
     ...buildGlobalArgs(options),
@@ -183,7 +220,7 @@ export async function rememberRecord(record, options = {}, signal) {
     args.push("--metadata", JSON.stringify(record.metadata));
   }
   try {
-    const { code, stdout, stderr } = await spawnEden(bin, "remember", args, signal);
+    const { code, stdout, stderr } = await spawnEden(bin, "remember", args, { signal, timeoutMs });
     if (code !== 0) {
       const error = cleanErrorMessage(stderr || stdout);
       return { ok: false, error, stderr: stderr || stdout };
@@ -206,7 +243,7 @@ export async function rememberRecord(record, options = {}, signal) {
  * Generate a document summary for a goal/topic from eden-memory. Used by the
  * ATP recorder to produce stage summaries (stage 6 / archivist).
  */
-export async function documentGoal(options, signal) {
+export async function documentGoal(options, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
     ...buildGlobalArgs(options),
@@ -218,7 +255,7 @@ export async function documentGoal(options, signal) {
   if (options.format) args.push("--format", options.format === "md" ? "markdown" : options.format);
   if (options.limit !== undefined && Number.isFinite(options.limit)) args.push("--limit", String(options.limit));
   try {
-    const { code, stdout, stderr } = await spawnEden(bin, "document", args, signal);
+    const { code, stdout, stderr } = await spawnEden(bin, "document", args, { signal, timeoutMs });
     if (code !== 0) {
       const error = cleanErrorMessage(stderr || stdout);
       return { ok: false, error, stderr: stderr || stdout };
@@ -236,7 +273,7 @@ export async function documentGoal(options, signal) {
  * Search memory records by keywords and optional metadata filters.
  * Safe wrapper: failures return an empty result set rather than throwing.
  */
-export async function search(options, signal) {
+export async function search(options, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
     ...buildGlobalArgs(options),
@@ -250,7 +287,7 @@ export async function search(options, signal) {
   if (isRecord(options.filters)) args.push("--filters", JSON.stringify(options.filters));
   if (options.limit !== undefined && Number.isFinite(options.limit)) args.push("--limit", String(options.limit));
   try {
-    const { code, stdout, stderr } = await spawnEden(bin, "search", args, signal);
+    const { code, stdout, stderr } = await spawnEden(bin, "search", args, { signal, timeoutMs });
     if (code !== 0) {
       const error = cleanErrorMessage(stderr || stdout);
       return { ok: false, error, stderr: stderr || stdout, results: [] };
@@ -271,11 +308,11 @@ export async function search(options, signal) {
  * Check whether the configured eden-memory database is reachable. Returns
  * `locked: true` when another process holds the SQLite lock.
  */
-export async function health(options = {}) {
+export async function health(options = {}, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [...buildGlobalArgs(options)];
   try {
-    const { code, stdout, stderr } = await spawnEden(bin, "health", args);
+    const { code, stdout, stderr } = await spawnEden(bin, "health", args, { signal, timeoutMs });
     const output = (stderr || stdout).toLowerCase();
     const locked = output.includes("locked by another eden-memory process") || output.includes("already locked");
     if (code !== 0 || locked) {

@@ -97,19 +97,26 @@ export function rememberRecord(
   record: EdenRememberRecord,
   options?: EdenMemoryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<EdenRememberResult>;
 
 export function documentGoal(
   options: EdenDocumentOptions & EdenMemoryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<EdenDocumentResult>;
 
 export function search(
   options: EdenSearchOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<EdenSearchResult>;
 
-export function health(options?: EdenMemoryOptions): Promise<EdenHealthResult>;
+export function health(
+  options?: EdenMemoryOptions,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<EdenHealthResult>;
 
 export function resolveEdenOptions(env?: Record<string, string | undefined>): EdenMemoryOptions;
 
@@ -129,6 +136,6 @@ export const _testing: {
     bin: string,
     subcommand: string,
     args: string[],
-    signal?: AbortSignal,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>;
 };

@@ -14,6 +14,7 @@ import {
   getMissingRequiredEnvFields,
   getMissingRequiredEdenOptions,
   getRequiredEnvFieldNames,
+  _testing,
 } from "../../src/src/memory/eden-memory.js";
 
 function makeFakeBin(script: string): string {
@@ -243,6 +244,75 @@ setTimeout(() => { console.log(JSON.stringify({ id: "late" })); }, 2000);
     const promise = rememberRecord({ content: "test" }, { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, controller.signal);
     setTimeout(() => controller.abort(), 50);
     const result = await promise;
+    assert.equal(result.ok, false);
+  });
+
+  it("spawnEden rejects with a timeout error for a hanging child", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("done"); }, 60_000);
+`);
+    await assert.rejects(
+      () => _testing.spawnEden(bin, "health", [], { timeoutMs: 50 }),
+      /timed out/,
+    );
+  });
+
+  it("health returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("ok"); }, 60_000);
+`);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, undefined, 50);
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("rememberRecord returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log(JSON.stringify({ id: "late" })); }, 60_000);
+`);
+    const result = await rememberRecord(
+      { content: "test" },
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("documentGoal returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("summary"); }, 60_000);
+`);
+    const result = await documentGoal(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", goalId: "g1" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("search returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log(JSON.stringify({ results: [] })); }, 60_000);
+`);
+    const result = await search(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", keywords: "blocked" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+    assert.deepEqual(result.results, []);
+  });
+
+  it("AbortSignal.timeout aborts health before the wrapper timeout", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("ok"); }, 60_000);
+`);
+    const signal = AbortSignal.timeout(50);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, signal, 10_000);
     assert.equal(result.ok, false);
   });
 });

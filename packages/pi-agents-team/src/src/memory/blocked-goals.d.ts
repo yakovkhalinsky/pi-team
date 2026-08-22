@@ -15,6 +15,7 @@ export interface BlockedGoalsResult {
 export function findBlockedOrUnfinishedGoals(
   options: EdenMemoryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<BlockedGoalsResult>;
 
 export function formatBlockedGoalsSummary(goals: BlockedGoal[] | undefined): string | undefined;

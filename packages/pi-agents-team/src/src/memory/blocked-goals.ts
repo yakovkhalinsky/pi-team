@@ -38,7 +38,7 @@ function extractContent(result) {
  * The function never throws. If eden-memory is unreachable or misconfigured,
  * it returns { ok: false, goals: [], error }.
  */
-export async function findBlockedOrUnfinishedGoals(options, signal) {
+export async function findBlockedOrUnfinishedGoals(options, signal, timeoutMs) {
   const common = {
     bin: options.bin,
     db: options.db,
@@ -61,6 +61,7 @@ export async function findBlockedOrUnfinishedGoals(options, signal) {
         filters: { stage: "goal-receipt" },
       },
       signal,
+      timeoutMs,
     ),
     search(
       {
@@ -68,6 +69,7 @@ export async function findBlockedOrUnfinishedGoals(options, signal) {
         filters: { stage: "goal-receipt" },
       },
       signal,
+      timeoutMs,
     ),
     search(
       {
@@ -75,6 +77,7 @@ export async function findBlockedOrUnfinishedGoals(options, signal) {
         filters: { stage: "hand-off-or-closure" },
       },
       signal,
+      timeoutMs,
     ),
   ]);
 

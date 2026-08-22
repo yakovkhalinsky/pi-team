@@ -18,6 +18,7 @@ export interface AtpRecorderOptions {
   env?: Record<string, string | undefined>;
   edenOptions?: EdenMemoryOptions;
   signal?: AbortSignal;
+  timeoutMs?: number;
   edenMemoryStatus?: EdenMemoryStatus;
 }
 
@@ -96,6 +97,7 @@ export function recordWorkerPrune(
 export function generateStageSummary(
   options: StageSummaryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<{ ok: boolean; output?: string; error?: string }>;
 
 export const _testing: {

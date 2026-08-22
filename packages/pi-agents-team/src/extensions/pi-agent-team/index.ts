@@ -390,12 +390,14 @@ export default function (pi, options = {}) {
         health,
         edenOptions,
         healthIntervalMs: 60_000,
+        healthTimeoutMs: 15_000,
       });
       memoryTracker.startPolling();
 
+      const startupSignal = AbortSignal.timeout(15_000);
       void (async () => {
         try {
-          const healthResult = await health(edenOptions);
+          const healthResult = await health(edenOptions, startupSignal);
           memoryTracker.updateFromHealthResult(healthResult);
           if (!healthResult.ok) {
             logMemoryWarning(`Eden-memory health check failed: ${healthResult.error}`);
@@ -404,12 +406,12 @@ export default function (pi, options = {}) {
 
           const receiptResult = await recordGoalReceipt(
             `session_start ${new Date().toISOString()}`,
-            { edenOptions, edenMemoryStatus: memoryTracker.status },
+            { edenOptions, edenMemoryStatus: memoryTracker.status, signal: startupSignal },
             { packageName: "pi-agents-team" },
           );
           memoryTracker.updateFromWriteResult(receiptResult);
 
-          const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions);
+          const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions, startupSignal);
           if (blockedResult.ok) {
             lastBlockedGoals = blockedResult.goals;
             if (lastBlockedGoals.length > 0) {

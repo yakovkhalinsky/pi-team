@@ -107,7 +107,22 @@ export function createMemoryStatusTracker(options) {
     if (!options.enabled || !options.health || runningHealthCheck) return;
     runningHealthCheck = true;
     try {
-      const result = await options.health(options.edenOptions);
+      const timeoutMs = options.healthTimeoutMs ?? 10_000;
+      const timeout = new Promise((_, reject) => {
+        const id = setTimeout(
+          () => reject(new Error(`Eden-memory health check timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+        if (typeof id.unref === "function") id.unref();
+      });
+      const result = await Promise.race([
+        options.health(
+          options.edenOptions,
+          AbortSignal.timeout(timeoutMs),
+          timeoutMs,
+        ),
+        timeout,
+      ]);
       updateFromHealthResult(result);
     } catch (error) {
       updateFromHealthResult({
