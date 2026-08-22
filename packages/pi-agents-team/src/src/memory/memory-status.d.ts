@@ -59,13 +59,13 @@ export interface MemoryStatusTracker {
     updateFromHealthResult(result: EdenMemoryHealthResult): void;
     startPolling(): void;
     stopPolling(): void;
-    consumeNotification(): string | undefined;
 }
 export interface MemoryStatusTrackerOptions {
     enabled: boolean;
-    health?: (options?: Record<string, unknown>) => Promise<EdenMemoryHealthResult>;
+    health?: (options?: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number) => Promise<EdenMemoryHealthResult>;
     edenOptions?: Record<string, unknown>;
     healthIntervalMs?: number;
+    healthTimeoutMs?: number;
 }
 export declare function createMemoryStatusTracker(options: MemoryStatusTrackerOptions): MemoryStatusTracker;
 export declare function createWorkerEdenMemoryStatus(enabled: boolean): EdenMemoryStatus;
@@ -90,7 +90,6 @@ export declare const _testing: {
     normalizeError: (result: {
         error?: unknown;
     }) => string | undefined;
-    notificationSignature: (error: string | undefined, locked: boolean) => string;
     MAX_EVENT_HISTORY: number;
     aggregateEdenMemoryStatus: (teamStatus: EdenMemoryStatus | undefined, workers: {
         edenMemoryStatus?: EdenMemoryStatus;

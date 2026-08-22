@@ -84,6 +84,8 @@ On every `session_start`, when eden-memory is enabled and configured, the thin e
 
 The detection is heuristic: it relies on the marker text and the presence/absence of lifecycle stage markers in the same workspace/user/agent scope. It does not block session startup; if the query fails, the error is logged via `pi.appendEntry` and the session continues normally.
 
+Warnings are emitted during the startup sequence only. There is no per-session notification deduplication; the one-warning-per-session effect is a consequence of the startup-only logging, not an explicit deduplication mechanism.
+
 ## Stopping a conflicting eden-memory process
 
 eden-memory uses SQLite with an exclusive lock. If another process already holds the lock, writes fail with a message such as:
