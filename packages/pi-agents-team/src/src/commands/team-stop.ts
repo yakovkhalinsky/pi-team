@@ -65,7 +65,7 @@ async function stopOne(dependencies, worker) {
 }
 export function registerTeamStopCommand(pi, dependencies) {
     pi.registerCommand("team-stop", {
-        description: "Stop a worker: /team-stop <worker-id|all>. Cancels running/starting; closes idle/waiting_followup; refuses already-terminal entries (use overlay [p] to clear them).",
+        description: "Stop a worker: /team-stop <worker-id|all>. Cancels running/starting; closes idle/waiting_followup; refuses already-terminal entries (use /team then [p] to clear them).",
         getArgumentCompletions: (prefix) => {
             if (/\s/.test(prefix))
                 return [];

@@ -61,6 +61,23 @@ export const ProjectRoleConfigSchema = Type.Object({
     access: Type.Optional(ProjectRoleAccessSchema),
     prompt: Type.Optional(FlatPromptValueSchema),
 }, { additionalProperties: false });
+export const EdenMemoryConfigSchema = Type.Object({
+    enabled: Type.Boolean({ default: false }),
+    bin: Type.Optional(Type.String()),
+    db: Type.Optional(Type.String()),
+    workspaceId: Type.Optional(Type.String()),
+    userId: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    semanticSearch: Type.Boolean({ default: false }),
+    llmApiKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    llmBaseUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    logLevel: Type.Optional(Type.String()),
+}, { additionalProperties: false });
+
+export const TeamMemoryConfigSchema = Type.Object({
+    edenMemory: Type.Optional(EdenMemoryConfigSchema),
+}, { additionalProperties: false });
+
 /**
  * Role keys are free-form — users own the role map. `schemaVersion` is
  * validated at parse time as a number (not a literal) so older files still
@@ -82,6 +99,7 @@ export const TeamProjectConfigSchema = Type.Object({
     routingMode: Type.Optional(Type.Union([Type.Literal("team"), Type.Literal("solo")])),
     workerAccess: Type.Optional(TeamProjectWorkerAccessSchema),
     display: Type.Optional(TeamProjectDisplaySchema),
+    memory: Type.Optional(TeamMemoryConfigSchema),
     roles: Type.Optional(Type.Record(Type.String(), ProjectRoleConfigSchema)),
 }, { additionalProperties: false });
 export const WorkerUsageStatsSchema = Type.Object({
@@ -162,22 +180,9 @@ export const WorkerRuntimeStateSchema = Type.Object({
     usage: WorkerUsageStatsSchema,
     error: Type.Optional(Type.String()),
 });
-export const TeamDashboardEntrySchema = Type.Object({
-    workerId: Type.String(),
-    profileName: Type.String(),
-    status: enumSchema(WORKER_STATUSES),
-    taskTitle: Type.Optional(Type.String()),
-    currentToolName: Type.Optional(Type.String()),
-    summarySnippet: Type.Optional(Type.String()),
-    relayQuestionCount: Type.Number({ default: 0 }),
-    lastUpdateAt: Type.Number(),
-});
 export const TeamUiStateSchema = Type.Object({
     statusKey: Type.String(),
     widgetKey: Type.String(),
-    overlayOpen: Type.Boolean({ default: false }),
-    selectedWorkerId: Type.Optional(Type.String()),
-    dashboardEntries: Type.Array(TeamDashboardEntrySchema),
     lastRenderAt: Type.Number(),
 });
 export const TeamConfigSchema = Type.Object({
@@ -222,6 +227,7 @@ export const TeamConfigSchema = Type.Object({
         statusMessageType: Type.String(),
         storeTranscripts: Type.Boolean({ default: false }),
     }),
+    memory: Type.Optional(TeamMemoryConfigSchema),
     profiles: Type.Array(TeamProfileSpecSchema),
 });
 export const PersistedTeamStateSchema = Type.Object({
@@ -283,6 +289,12 @@ export const DEFAULT_TEAM_CONFIG = {
         stateCustomType: "pi-agent-team/state",
         statusMessageType: "pi-agent-team/status",
         storeTranscripts: false,
+    },
+    memory: {
+        edenMemory: {
+            enabled: true,
+            semanticSearch: false,
+        },
     },
     profiles: [
         {
@@ -358,8 +370,6 @@ export function createDefaultTeamState(config = DEFAULT_TEAM_CONFIG, now = Date.
         ui: {
             statusKey: config.ui.statusKey,
             widgetKey: config.ui.widgetKey,
-            overlayOpen: false,
-            dashboardEntries: [],
             lastRenderAt: now,
         },
         updatedAt: now,
@@ -387,60 +397,10 @@ export function normalizePersistedTeamState(raw, config = DEFAULT_TEAM_CONFIG) {
             ...base.ui,
             statusKey: typeof rawUi.statusKey === "string" ? rawUi.statusKey : base.ui.statusKey,
             widgetKey: typeof rawUi.widgetKey === "string" ? rawUi.widgetKey : base.ui.widgetKey,
-            overlayOpen: rawUi.overlayOpen === true,
-            selectedWorkerId: typeof rawUi.selectedWorkerId === "string" ? rawUi.selectedWorkerId : undefined,
-            dashboardEntries: Array.isArray(rawUi.dashboardEntries)
-                ? rawUi.dashboardEntries
-                : buildDashboardEntries(activeWorkers),
             lastRenderAt: typeof rawUi.lastRenderAt === "number" ? rawUi.lastRenderAt : base.ui.lastRenderAt,
         },
         updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : base.updatedAt,
     };
-}
-export function buildDashboardEntries(activeWorkers) {
-    return Object.values(activeWorkers)
-        .sort((left, right) => compareWorkerIds(left.workerId, right.workerId))
-        .map((worker) => ({
-        workerId: worker.workerId,
-        profileName: worker.profileName,
-        status: worker.status,
-        taskTitle: worker.currentTask?.title,
-        currentToolName: worker.lastToolName ?? worker.lastSummary?.currentToolName,
-        summarySnippet: worker.lastSummary?.headline,
-        relayQuestionCount: worker.pendingRelayQuestions.length,
-        lastUpdateAt: worker.lastEventAt,
-    }));
-}
-export function formatWorkerLabel(worker) {
-    const parts = [`${worker.profileName}:${worker.status}`];
-    if (worker.taskTitle)
-        parts.push(worker.taskTitle);
-    if (worker.currentToolName)
-        parts.push(`tool=${worker.currentToolName}`);
-    if (worker.relayQuestionCount > 0)
-        parts.push(`relays=${worker.relayQuestionCount}`);
-    return parts.join(" · ");
-}
-export function buildTeamWidgetLines(state, config = DEFAULT_TEAM_CONFIG) {
-    const entries = state.ui.dashboardEntries.length > 0 ? state.ui.dashboardEntries : buildDashboardEntries(state.activeWorkers);
-    const visibleEntries = entries.slice(0, config.ui.maxVisibleWorkers);
-    const lines = [
-        `${config.orchestration.packageName}`,
-        `mode: ${state.sessionMode}`,
-        `workers: ${entries.length} active`,
-    ];
-    if (visibleEntries.length === 0) {
-        lines.push("workers: none launched yet");
-    }
-    else {
-        for (const worker of visibleEntries) {
-            lines.push(`- ${formatWorkerLabel(worker)}`);
-        }
-    }
-    if (config.ui.showProfileNames) {
-        lines.push(`profiles: ${config.profiles.map((profile) => profile.name).join(", ")}`);
-    }
-    return lines;
 }
 export function buildOrchestratorSystemPrompt(state, config = DEFAULT_TEAM_CONFIG) {
     const profileList = config.profiles.map((profile) => profile.name).join(", ");

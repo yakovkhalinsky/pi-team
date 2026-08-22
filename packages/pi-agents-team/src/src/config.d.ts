@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { TEAM_SCAFFOLD_VERSION, type PersistedTeamState, type TeamConfig, type TeamDashboardEntry, type WorkerRuntimeState } from "./types.js";
+import { TEAM_SCAFFOLD_VERSION, type PersistedTeamState, type TeamConfig, type WorkerRuntimeState } from "./types.js";
 export { TEAM_SCAFFOLD_VERSION };
 export declare const CURRENT_SCAFFOLD_VERSION: 4;
 export declare const TeamPathScopeSchema: Type.TObject<{
@@ -252,31 +252,9 @@ export declare const WorkerRuntimeStateSchema: Type.TObject<{
     }>;
     error: Type.TOptional<Type.TString>;
 }>;
-export declare const TeamDashboardEntrySchema: Type.TObject<{
-    workerId: Type.TString;
-    profileName: Type.TString;
-    status: Type.TSchema;
-    taskTitle: Type.TOptional<Type.TString>;
-    currentToolName: Type.TOptional<Type.TString>;
-    summarySnippet: Type.TOptional<Type.TString>;
-    relayQuestionCount: Type.TNumber;
-    lastUpdateAt: Type.TNumber;
-}>;
 export declare const TeamUiStateSchema: Type.TObject<{
     statusKey: Type.TString;
     widgetKey: Type.TString;
-    overlayOpen: Type.TBoolean;
-    selectedWorkerId: Type.TOptional<Type.TString>;
-    dashboardEntries: Type.TArray<Type.TObject<{
-        workerId: Type.TString;
-        profileName: Type.TString;
-        status: Type.TSchema;
-        taskTitle: Type.TOptional<Type.TString>;
-        currentToolName: Type.TOptional<Type.TString>;
-        summarySnippet: Type.TOptional<Type.TString>;
-        relayQuestionCount: Type.TNumber;
-        lastUpdateAt: Type.TNumber;
-    }>>;
     lastRenderAt: Type.TNumber;
 }>;
 export declare const TeamConfigSchema: Type.TObject<{
@@ -453,18 +431,6 @@ export declare const PersistedTeamStateSchema: Type.TObject<{
     ui: Type.TObject<{
         statusKey: Type.TString;
         widgetKey: Type.TString;
-        overlayOpen: Type.TBoolean;
-        selectedWorkerId: Type.TOptional<Type.TString>;
-        dashboardEntries: Type.TArray<Type.TObject<{
-            workerId: Type.TString;
-            profileName: Type.TString;
-            status: Type.TSchema;
-            taskTitle: Type.TOptional<Type.TString>;
-            currentToolName: Type.TOptional<Type.TString>;
-            summarySnippet: Type.TOptional<Type.TString>;
-            relayQuestionCount: Type.TNumber;
-            lastUpdateAt: Type.TNumber;
-        }>>;
         lastRenderAt: Type.TNumber;
     }>;
     updatedAt: Type.TNumber;
@@ -472,9 +438,6 @@ export declare const PersistedTeamStateSchema: Type.TObject<{
 export declare const DEFAULT_TEAM_CONFIG: TeamConfig;
 export declare function createDefaultTeamState(config?: TeamConfig, now?: number): PersistedTeamState;
 export declare function normalizePersistedTeamState(raw: unknown, config?: TeamConfig): PersistedTeamState;
-export declare function buildDashboardEntries(activeWorkers: Record<string, WorkerRuntimeState>): TeamDashboardEntry[];
-export declare function formatWorkerLabel(worker: TeamDashboardEntry): string;
-export declare function buildTeamWidgetLines(state: PersistedTeamState, config?: TeamConfig): string[];
 export declare function buildOrchestratorSystemPrompt(state: PersistedTeamState, config?: TeamConfig): string;
 export declare const FOUNDATION_STATUS: {
     implementedTaskStatuses: readonly ["queued", "running", "waiting_followup", "completed", "blocked", "failed", "cancelled"];

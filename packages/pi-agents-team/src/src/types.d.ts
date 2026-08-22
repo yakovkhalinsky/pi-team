@@ -276,22 +276,9 @@ export interface WorkerRuntimeState {
     usage: WorkerUsageStats;
     error?: string;
 }
-export interface TeamDashboardEntry {
-    workerId: string;
-    profileName: string;
-    status: WorkerStatus;
-    taskTitle?: string;
-    currentToolName?: string;
-    summarySnippet?: string;
-    relayQuestionCount: number;
-    lastUpdateAt: number;
-}
 export interface TeamUiState {
     statusKey: string;
     widgetKey: string;
-    overlayOpen: boolean;
-    selectedWorkerId?: string;
-    dashboardEntries: TeamDashboardEntry[];
     lastRenderAt: number;
 }
 export interface TeamConfig {

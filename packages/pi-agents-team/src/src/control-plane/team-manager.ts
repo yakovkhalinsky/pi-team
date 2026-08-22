@@ -301,7 +301,7 @@ export class TeamManager {
         const worker = this.requireWorker(workerId);
         const previousStatus = worker.status;
         if (UNREACHABLE_STATUSES.has(worker.status)) {
-            throw new Error(`Worker ${workerId} is ${worker.status} — its RPC session is already disposed. Re-delegate the task with delegate_task (and overlay [p] to clear terminal entries from the dashboard).`);
+            throw new Error(`Worker ${workerId} is ${worker.status} — its RPC session is already disposed. Re-delegate the task with delegate_task (and /team to clear terminal entries from the dashboard).`);
         }
         const nextDelivery = resolveWorkerMessageDelivery(worker.status, delivery);
         if (nextDelivery === "steer") {

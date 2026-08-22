@@ -23,7 +23,7 @@ function cloneProfile(profile) {
     };
 }
 function cloneTeamConfig(config) {
-    return {
+    const cloned = {
         ...config,
         orchestration: {
             ...config.orchestration,
@@ -37,8 +37,13 @@ function cloneTeamConfig(config) {
         ui: { ...config.ui },
         safety: { ...config.safety },
         persistence: { ...config.persistence },
+        memory: config.memory ? { edenMemory: config.memory.edenMemory ? { ...config.memory.edenMemory } : undefined } : undefined,
         profiles: config.profiles.map(cloneProfile),
     };
+    if (!cloned.memory?.edenMemory) {
+        cloned.memory = { edenMemory: { enabled: false, semanticSearch: false } };
+    }
+    return cloned;
 }
 function makeDiagnostic(severity, code, message, fieldPath) {
     return { severity, code, message, fieldPath };
@@ -545,6 +550,29 @@ function makeActiveConfigFreshness(winningScope, layers, fatalScopes) {
         rawSchemaVersion: activeLayer.rawSchemaVersion,
     };
 }
+function mergeEdenMemoryConfig(baseConfig, parsed) {
+    const raw = parsed?.memory?.edenMemory;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return baseConfig;
+    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : baseConfig.memory?.edenMemory?.enabled;
+    const semanticSearch = typeof raw.semanticSearch === "boolean" ? raw.semanticSearch : baseConfig.memory?.edenMemory?.semanticSearch;
+    const pickString = (key) => typeof raw[key] === "string" ? raw[key] : baseConfig.memory?.edenMemory?.[key];
+    const memory = {
+        edenMemory: {
+            enabled,
+            semanticSearch,
+            bin: pickString("bin"),
+            db: pickString("db"),
+            workspaceId: pickString("workspaceId"),
+            userId: pickString("userId"),
+            agentId: pickString("agentId"),
+            llmApiKey: raw.llmApiKey === null ? null : pickString("llmApiKey"),
+            llmBaseUrl: raw.llmBaseUrl === null ? null : pickString("llmBaseUrl"),
+            logLevel: pickString("logLevel"),
+        },
+    };
+    return { ...baseConfig, memory };
+}
 export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     const baseConfig = cloneTeamConfig(options.baseConfig ?? DEFAULT_TEAM_CONFIG);
     let globalPath;
@@ -676,7 +704,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
         }
         return {
             status: "invalid",
-            config: baseConfig,
+            config: mergeEdenMemoryConfig(baseConfig, winningLayer?.parsed),
             sourcePath: projectPath ?? globalPath,
             projectRoot: projectPath ? computeLayerRoot("project", projectPath) : options.cwd,
             layers,
@@ -724,7 +752,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
         diagnostics.push(...nonWinningFatalDiagnostics);
         return {
             status: "invalid",
-            config: baseConfig,
+            config: mergeEdenMemoryConfig(baseConfig, winningLayer?.parsed),
             sourcePath: projectPath ?? globalPath,
             projectRoot: projectPath ? computeLayerRoot("project", projectPath) : options.cwd,
             layers,
@@ -752,13 +780,13 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     if (parsedLayers.length === 0 || !winningLayer) {
         return {
             status: "builtin",
-            config: {
+            config: mergeEdenMemoryConfig({
                 ...baseConfig,
                 safety: {
                     ...baseConfig.safety,
                     projectRoot: projectPath ? computeLayerRoot("project", projectPath) : options.cwd,
                 },
-            },
+            }, winningLayer?.parsed),
             layers,
             activeConfigFreshness,
             enabled,
@@ -779,7 +807,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     const allowWorkerPathsOutsideProject = winningLayer.parsed.workerAccess?.allowPathsOutsideProject !== false;
     return {
         status: "project",
-        config: {
+        config: mergeEdenMemoryConfig({
             ...baseConfig,
             safety: {
                 ...baseConfig.safety,
@@ -788,7 +816,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
                 projectRoot,
             },
             profiles,
-        },
+        }, winningLayer?.parsed),
         sourcePath: projectPath ?? globalPath,
         projectRoot,
         layers,

@@ -12,8 +12,23 @@ import { registerTeamInitCommand } from "../../src/commands/team-init.js";
 import { registerTeamResultCommand } from "../../src/commands/team-result.js";
 import { registerTeamSteerCommand } from "../../src/commands/team-steer.js";
 import { registerTeamStopCommand } from "../../src/commands/team-stop.js";
+import { registerTeamEnvCommand, runEnvWizard } from "../../src/commands/env.js";
+import {
+  recordGoalReceipt,
+  recordHandOffOrClosure,
+  recordRecordingAndArchival,
+  recordRouting,
+  recordTerminalStageForProfile,
+  recordWorkerPrune,
+  recordWorkerRelay,
+  recordWorkerTerminal,
+} from "../../src/memory/atp-recorder.js";
+import { getMissingRequiredEnvFields, resolveEdenOptions } from "../../src/memory/eden-memory.js";
 import { registerTeamAutocomplete } from "../../src/ui/autocomplete.js";
 import { buildTeamStatusLine, buildTeamWidgetLines, getTeamStatusTip, hasAnimatedWorkers } from "../../src/ui/status-widget.js";
+import { createZeroWorkerUsageAggregate } from "../../src/usage.js";
+import { InlineDashboardState } from "../../src/ui/inline-dashboard-state.js";
+import { TeamDashboardWidget } from "../../src/ui/inline-dashboard-widget.js";
 import { formatRelayToast, formatWorkerLabel, formatWorkerStartedToast, formatWorkerTerminalToast, formatWorkersStartedToast, formatWorkersTerminalToast } from "../../src/ui/display-grammar.js";
 import { formatAgentMessageResult, formatAgentResultNotReady, formatDelegateTaskResult, formatWaitForAgentsResult, formatWorkerCompact, formatWorkers } from "../../src/ui/tool-formatters.js";
 import { renderAgentToolCallTitle } from "../../src/ui/tool-renderers.js";
@@ -146,6 +161,43 @@ function getProjectTrustDecisionForContext(ctx) {
 }
 function isProjectConfigTrustedForContext(ctx) {
     return getProjectTrustDecisionForContext(ctx) ?? true;
+}
+function buildAtpContext(ctx, extra = {}) {
+    return {
+        packageName: activeProjectConfig?.config?.orchestration?.packageName ?? DEFAULT_TEAM_CONFIG.orchestration.packageName,
+        ...extra,
+    };
+}
+function buildAtpRecorderOptions(signal) {
+    const memoryEnabled = activeProjectConfig?.config?.memory?.edenMemory?.enabled === true;
+    if (!memoryEnabled)
+        return undefined;
+    return {
+        env: process.env,
+        signal,
+        edenOptions: buildEdenMemoryOptions(),
+    };
+}
+function buildEdenMemoryOptions() {
+    const memoryConfig = activeProjectConfig?.config?.memory?.edenMemory;
+    const envOptions = resolveEdenOptions(process.env);
+    return {
+        ...envOptions,
+        ...(typeof memoryConfig?.bin === "string" ? { bin: memoryConfig.bin } : {}),
+        ...(typeof memoryConfig?.db === "string" ? { db: memoryConfig.db } : {}),
+        ...(typeof memoryConfig?.workspaceId === "string" ? { workspaceId: memoryConfig.workspaceId } : {}),
+        ...(typeof memoryConfig?.userId === "string" ? { userId: memoryConfig.userId } : {}),
+        ...(typeof memoryConfig?.agentId === "string" ? { agentId: memoryConfig.agentId } : {}),
+        ...(typeof memoryConfig?.llmApiKey === "string" ? { llmApiKey: memoryConfig.llmApiKey } : {}),
+        ...(typeof memoryConfig?.llmBaseUrl === "string" ? { llmBaseUrl: memoryConfig.llmBaseUrl } : {}),
+        ...(typeof memoryConfig?.logLevel === "string" ? { logLevel: memoryConfig.logLevel } : {}),
+    };
+}
+function recordAtpStage(stageRecorder, content, ctx, signal) {
+    const options = buildAtpRecorderOptions(signal);
+    if (!options)
+        return;
+    void stageRecorder(content, options, buildAtpContext(ctx));
 }
 function updateDelegateTaskProfileDescription(config) {
     const profileListSnapshot = config.profiles.map((profile) => profile.name);
@@ -293,11 +345,8 @@ function applyUi(ctx, state, frame = 0, config = DEFAULT_TEAM_CONFIG, active = t
     }
     ctx.ui.setTitle(config.ui.titleTemplate.replace("{mode}", state.sessionMode));
 }
-function clearUi(ctx, config = DEFAULT_TEAM_CONFIG) {
-    if (!ctx?.hasUI)
-        return;
-    ctx.ui.setStatus(config.ui.statusKey, undefined);
-    ctx.ui.setWidget(config.ui.widgetKey, undefined);
+function getDashboardWidgetKey(config = DEFAULT_TEAM_CONFIG) {
+    return `${config.ui.widgetKey}-dashboard`;
 }
 function emitCommandOutput(pi, ctx, text, config = DEFAULT_TEAM_CONFIG) {
     if (ctx.hasUI) {
@@ -480,6 +529,65 @@ export default function (pi) {
     });
     const lastStatus = new Map();
     const lastRelayCount = new Map();
+    const dashboardState = new InlineDashboardState();
+    let dashboardWidget;
+    let detachDashboardInput;
+
+    function getOrCreateDashboardWidget(ctx) {
+        if (!dashboardWidget) {
+            dashboardWidget = new TeamDashboardWidget(ctx, teamManager, dashboardState, {
+                displayCost: activeProjectConfig.displayCost,
+                cwd: ctx.cwd,
+                config: activeProjectConfig.config,
+                widgetKey: getDashboardWidgetKey(activeProjectConfig.config),
+            });
+        }
+        else {
+            dashboardWidget.setContext(ctx);
+            dashboardWidget.teamManager = teamManager;
+            dashboardWidget.options.displayCost = activeProjectConfig.displayCost;
+            dashboardWidget.displayCost = activeProjectConfig.displayCost !== false;
+            dashboardWidget.options.config = activeProjectConfig.config;
+            dashboardWidget.options.cwd = ctx.cwd;
+        }
+        return dashboardWidget;
+    }
+    function ensureDashboardInputListener(ctx) {
+        if (detachDashboardInput)
+            return;
+        if (!ctx?.hasUI || ctx.mode !== "tui")
+            return;
+        detachDashboardInput = ctx.ui.onTerminalInput((data) => {
+            const widget = dashboardWidget;
+            if (!widget || !widget.isActive())
+                return undefined;
+            const consumed = widget.handleInput(data);
+            return consumed ? { consume: true } : undefined;
+        });
+    }
+    function clearDashboardUi(ctx, config = DEFAULT_TEAM_CONFIG) {
+        if (ctx?.hasUI)
+            ctx.ui.setWidget(getDashboardWidgetKey(config), undefined);
+        if (detachDashboardInput) {
+            detachDashboardInput();
+            detachDashboardInput = undefined;
+        }
+        dashboardState.setActive(false);
+    }
+    function clearUi(ctx, config = DEFAULT_TEAM_CONFIG) {
+        if (!ctx?.hasUI)
+            return;
+        ctx.ui.setStatus(config.ui.statusKey, undefined);
+        ctx.ui.setWidget(config.ui.widgetKey, undefined);
+        clearDashboardUi(ctx, config);
+    }
+    function renderDashboardWidget(ctx) {
+        if (!ctx?.hasUI || ctx.mode !== "tui" || !dashboardState.active)
+            return;
+        const widget = getOrCreateDashboardWidget(ctx);
+        widget.refresh();
+        ensureDashboardInputListener(ctx);
+    }
     const pendingStartedTransitions = [];
     const pendingTerminalTransitions = [];
     let notificationTimer;
@@ -492,6 +600,7 @@ export default function (pi) {
     const TIP_INTERVAL_MS = 15_000;
     function renderUi(ctx, state, frame = spinnerFrame, config = activeProjectConfig.config, active = isTeamActive(activeProjectConfig), routingMode = teamManager.routingMode, displayCost = activeProjectConfig.displayCost) {
         applyUi(ctx, state, frame, config, active, routingMode, displayCost, getTeamStatusTip(tipIndex), orchestratorWorking);
+        renderDashboardWidget(ctx);
         if (ctx?.hasUI && active)
             ensureTipRotationRunning();
         else
@@ -795,6 +904,7 @@ export default function (pi) {
                 throw new Error("Worker prompt was not sent because its durable persistence checkpoint could not be appended.");
             }
         });
+        const lastPrunedUsageTotals = createZeroWorkerUsageAggregate();
         const detachStateListener = manager.onStateChange((state) => {
             teamState = state;
             // Persistence is best-effort at this callback boundary. Pi invokes state
@@ -831,6 +941,13 @@ export default function (pi) {
                     if (notificationTimer)
                         clearTimeout(notificationTimer);
                     notificationTimer = setTimeout(flushWorkerNotifications, 400);
+                    const atpCtx = {
+                        ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title }),
+                    };
+                    void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(), atpCtx);
+                    if (worker.finalAnswer?.trim()) {
+                        void recordTerminalStageForProfile(worker.profileName, worker.finalAnswer.trim(), buildAtpRecorderOptions(), atpCtx);
+                    }
                 }
                 lastStatus.set(worker.workerId, worker.status);
                 const prevRelays = lastRelayCount.get(worker.workerId) ?? 0;
@@ -842,7 +959,25 @@ export default function (pi) {
                         activeContext.ui.notify(formatRelayToast(worker, question), "warning");
                     }
                 }
+                if (currRelays > prevRelays) {
+                    const newest = worker.pendingRelayQuestions[worker.pendingRelayQuestions.length - 1];
+                    if (newest?.question) {
+                        void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(), {
+                            ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency }),
+                        });
+                    }
+                }
                 lastRelayCount.set(worker.workerId, currRelays);
+            }
+            const pruned = state.prunedWorkerUsageTotals;
+            const changed = pruned.workers !== lastPrunedUsageTotals.workers
+                || pruned.turns !== lastPrunedUsageTotals.turns
+                || pruned.inputTokens !== lastPrunedUsageTotals.inputTokens
+                || pruned.outputTokens !== lastPrunedUsageTotals.outputTokens
+                || pruned.costUsd !== lastPrunedUsageTotals.costUsd;
+            if (changed) {
+                Object.assign(lastPrunedUsageTotals, pruned);
+                void recordWorkerPrune(pruned.workers, pruned, buildAtpRecorderOptions(), buildAtpContext(activeContext));
             }
         });
         const workerEvents = manager.workerManager;
@@ -882,6 +1017,25 @@ export default function (pi) {
             return teamManager;
         },
         emitText: (ctx, text) => emitCommandOutput(pi, ctx, text, activeProjectConfig.config),
+        toggleInlineDashboard: (ctx, initialWorkerId) => {
+            const wasActive = dashboardState.active;
+            if (!wasActive) {
+                dashboardState.setActive(true);
+            }
+            else if (!initialWorkerId) {
+                dashboardState.setActive(false);
+            }
+            if (initialWorkerId)
+                dashboardState.selectWorker(initialWorkerId);
+            const widget = getOrCreateDashboardWidget(ctx);
+            if (dashboardState.active) {
+                widget.refresh();
+                ensureDashboardInputListener(ctx);
+            }
+            else {
+                widget.clear();
+            }
+        },
     };
     registerTeamCommand(pi, commandDependencies);
     registerCopyCommand(pi, commandDependencies);
@@ -895,6 +1049,7 @@ export default function (pi) {
     registerTeamResultCommand(pi, commandDependencies);
     registerTeamSteerCommand(pi, commandDependencies);
     registerTeamStopCommand(pi, commandDependencies);
+    registerTeamEnvCommand(pi);
     function ensureNotReloading() {
         if (reloading) {
             throw new Error("Pi Agents Team is reloading its project config — retry in a moment.");
@@ -954,6 +1109,7 @@ export default function (pi) {
                 projectTrustRoot: projectTrusted === undefined ? undefined : activeProjectConfig.projectRoot ?? ctx.cwd,
                 reuseWorkerId: params.reuseWorkerId ?? undefined,
             }, signal);
+            recordAtpStage(recordRouting, `Routed to ${params.profileName}: ${params.title}`, ctx, signal);
             teamState = teamManager.snapshot();
             renderUi(activeContext, teamState, spinnerFrame, activeProjectConfig.config, isTeamActive(activeProjectConfig), teamManager.routingMode, activeProjectConfig.displayCost);
             return {
@@ -975,7 +1131,7 @@ export default function (pi) {
         prepareArguments: createNullableArgumentPreparer(["workerId"]),
         constrainedSampling: PREFERRED_JSON_SCHEMA_SAMPLING,
         renderCall: renderAgentToolCallTitle("agent_status"),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             const resolvedId = params.workerId ? teamManager.resolveWorkerId(params.workerId) ?? params.workerId : undefined;
             const workers = resolvedId
                 ? [teamManager.getWorkerStatus(resolvedId)].filter((worker) => Boolean(worker))
@@ -997,7 +1153,7 @@ export default function (pi) {
         parameters: WorkerIdSchema,
         constrainedSampling: PREFERRED_JSON_SCHEMA_SAMPLING,
         renderCall: renderAgentToolCallTitle("agent_result"),
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             const workerId = teamManager.resolveWorkerId(params.workerId) ?? params.workerId;
             const result = teamManager.getWorkerResult(workerId);
             if (!result) {
@@ -1114,6 +1270,8 @@ export default function (pi) {
     pi.on("session_start", async (event, ctx) => {
         stopTipRotation();
         activeContext = ctx;
+        dashboardState.setActive(false);
+        clearDashboardUi(ctx, activeProjectConfig.config);
         piVersionMismatchNotifier.reset();
         reloading = true;
         try {
@@ -1150,10 +1308,19 @@ export default function (pi) {
             }
             notifyActiveConfigFreshness(ctx, activeProjectConfig);
             notifyThinkingLevelWarnings(ctx, activeProjectConfig.thinkingLevelWarnings);
+            if (activeProjectConfig.config.memory?.edenMemory?.enabled === true) {
+                const missingEnv = getMissingRequiredEnvFields();
+                if (missingEnv.length > 0) {
+                    const wizardResult = await runEnvWizard(ctx, false);
+                    const level = wizardResult.missingAfter.length > 0 ? "warning" : wizardResult.updated ? "info" : "warning";
+                    ctx.ui.notify(wizardResult.report.join("\n"), level);
+                }
+            }
             if (event.reason !== "startup" && markedCount > 0 && isTeamActive(activeProjectConfig)) {
                 const noun = markedCount === 1 ? "worker" : "workers";
                 ctx.ui.notify(`Workers exited — ${markedCount} ${noun} restored from ${event.reason}; relaunch if needed.`, "warning");
             }
+            recordAtpStage(recordGoalReceipt, `Session started (${event.reason})`, ctx);
         }
         finally {
             reloading = false;
@@ -1192,6 +1359,8 @@ export default function (pi) {
     });
     pi.on("session_tree", async (event, ctx) => {
         activeContext = ctx;
+        dashboardState.setActive(false);
+        clearDashboardUi(ctx, activeProjectConfig.config);
         // This event is the first confirmation that Pi has moved the leaf. Isolate
         // the unresolved old suffix now—not during the provisional before hook.
         const hadUnresolvedOldRecords = persistenceJournal.hasPending();
@@ -1283,6 +1452,7 @@ export default function (pi) {
             detachTeamManagerListener(false);
             clearUi(ctx, activeProjectConfig.config);
             orchestratorWorking = false;
+            recordAtpStage(recordHandOffOrClosure, `Session shutting down`, ctx);
             activeContext = undefined;
         }
     });

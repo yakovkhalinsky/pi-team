@@ -1,7 +1,7 @@
-import { openTeamDashboardOverlay } from "../ui/overlay.js";
 import { buildTeamDashboardText } from "../ui/dashboard.js";
 import { formatCommandWarning } from "../ui/display-grammar.js";
 import { formatUnknownWorker, suggestTargets } from "../util/suggest.js";
+
 export function registerTeamCommand(pi, dependencies) {
     pi.registerCommand("team", {
         description: "Open the Pi Agents Team dashboard: /team or /team <worker-id>",
@@ -25,16 +25,14 @@ export function registerTeamCommand(pi, dependencies) {
                     displayCost: dependencies.teamManager.displayCost,
                 }));
             };
-            const openOverlay = async (initialWorkerId) => {
-                await openTeamDashboardOverlay(ctx, dependencies.teamManager, {
-                    initialWorkerId,
-                    displayCost: dependencies.teamManager.displayCost,
-                    emitText: (text) => dependencies.emitText(ctx, text),
-                });
+            const toggleInlineDashboard = (workerId) => {
+                if (typeof dependencies.toggleInlineDashboard !== "function")
+                    return;
+                dependencies.toggleInlineDashboard(ctx, workerId);
             };
             if (!input) {
                 if (ctx.mode === "tui")
-                    await openOverlay();
+                    toggleInlineDashboard();
                 else
                     await emitDashboardText();
                 return;
@@ -50,7 +48,7 @@ export function registerTeamCommand(pi, dependencies) {
                 return;
             }
             if (ctx.mode === "tui")
-                await openOverlay(workerId);
+                toggleInlineDashboard(workerId);
             else
                 await emitDashboardText();
         },

@@ -55,6 +55,12 @@ function buildFullScaffold() {
         display: {
             cost: true,
         },
+        memory: {
+            edenMemory: {
+                enabled: false,
+                semanticSearch: false,
+            },
+        },
         roles,
     };
 }

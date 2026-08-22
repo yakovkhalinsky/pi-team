@@ -49,8 +49,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "echo 'no tests configured for this port'",
-    "check": "npm run build && npm run typecheck"
+    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "check": "npm run build && npm run typecheck && npm test"
   },
   "pi": {
     "extensions": [
@@ -67,6 +67,7 @@
     "typebox": "*"
   },
   "devDependencies": {
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   }
 }

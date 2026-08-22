@@ -67,8 +67,29 @@ Slash commands available once the extension is loaded. The orchestrator's own to
 | `/team-result <id>` | Print the transcript-free worker result and verbatim `<final_answer>` contents when available. |
 | `/team-enable on\|off [--local\|--global]` | Toggle routing between **team** and **solo**. Without a flag the change is session-only; `--local` or `--global` persists `routingMode` to that config scope. |
 | `/team-init [global\|local] [--force]` | Scaffold `agents-team.json` with built-in roles, schema/scaffold markers, default routing, and worker access defaults. Existing files require `--force`, which backs up the previous file first. |
+| `/team-env [--check\|--force]` | Check or create the project `.env` for eden-memory ATP record keeping. Reports missing required fields, prompts for values in interactive sessions, and warns if the configured DB is locked by another eden-memory process. |
 
 In TUI sessions that support editor autocomplete, type `@` to complete tracked workers (`@w1`) and `$` to complete configured roles (`$verifier`) while writing prompts or command arguments.
+
+## Durable ATP record keeping with eden-memory
+
+Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. The integration is **opt-in**: set `memory.edenMemory.enabled: true` in `agents-team.json` (or keep it off to skip all memory writes) and run `/team-env` to scaffold the project `.env`.
+
+When enabled, the extension writes structured markers for every ATP stage:
+
+| Stage | Marker | Hook |
+|---|---|---|
+| 1 Goal receipt | `[goal-received]` | `session_start` |
+| 2 Routing | `[routing]` | `delegate_task` |
+| 3 Context gathering | `[context-gathering]` | `agent_status` |
+| 4 Action | `[action]` | `delegate_task` launch |
+| 5 Verification | `[verdict]` | `agent_result` on terminal worker |
+| 6 Recording and archival | `[recorded]` + worker terminal/relay/prune | worker state changes |
+| 7 Hand-off or closure | `[closure]` | `session_shutdown` |
+
+Each marker carries `--metadata` with `marker`, `stage`, `owner`, `recordedAt`, plus `goalId`, `taskId`, `workerId`, `profileName`, and `round`/`supersedes` when applicable. Memory writes are best-effort: a missing `.env`, a locked database, or a CLI failure is captured and returned to the extension but never allowed to throw through the user-facing tool path. Use `/team-env --check` to see missing fields without writing the file.
+
+The integration reads `.env` values at call time so tests and alternate callers can inject configuration without mutating global `process.env`. See [docs/memory.md](docs/memory.md) for the full env schema, config schema additions, and how to stop a conflicting eden-memory process.
 
 ## Session persistence and recovery
 
@@ -107,6 +128,7 @@ Config freshness warnings are based on the active config layer only: project-loc
 | File | Covers |
 |---|---|
 | [Architecture](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/architecture.md) | Layering, runtime flow, state contract, animation layer. |
+| [Memory](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/memory.md) | eden-memory ATP integration, `.env` schema, lifecycle markers, stopping a locked DB. |
 | [Operations](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/operations.md) | Install, dashboard keys, copy flow, steer semantics, troubleshooting. |
 | [Profiles](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/profiles.md) | Default roles, how to create your own, prompt resolution, project vs global config, version bumps, launch-time safety. |
 | [Prompting](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/prompting.md) | Orchestrator + worker prompt contracts, the `<final_answer>` rules. |

@@ -1,0 +1,294 @@
+import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
+/**
+ * Required .env fields for the eden-memory ATP integration. The wizard writes
+ * these into the project .env; the wrapper reads them at call time so tests
+ * can inject values without mutating global process.env.
+ */
+export const EDEN_ENV_FIELDS = {
+  BIN: "EDEN_MEMORY_BIN",
+  ENABLED: "EDEN_MEMORY_ENABLED",
+  DB: "EDEN_MEMORY_DB",
+  WORKSPACE_ID: "EDEN_WORKSPACE_ID",
+  USER_ID: "EDEN_USER_ID",
+  AGENT_ID: "EDEN_AGENT_ID",
+  SEMANTIC_SEARCH: "EDEN_MEMORY_SEMANTIC_SEARCH",
+  LLM_API_KEY: "EDEN_LLM_API_KEY",
+  LLM_BASE_URL: "EDEN_LLM_BASE_URL",
+};
+
+/**
+ * Identity defaults used when a project .env is missing or partial. They match
+ * the names required by `eden-memory remember` and are surfaced by the /team-env
+ * wizard as the starting values.
+ */
+export const EDEN_DEFAULTS = {
+  bin: "/home/yakov/.local/bin/eden-memory",
+  db: resolve(homedir(), ".eden-memory", "default.db"),
+  workspaceId: "default",
+  userId: "yakov",
+  agentId: "pi-agents-team",
+  enabled: "true",
+  semanticSearch: "false",
+};
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function pickOption(options, key, fallback) {
+  if (options && typeof options[key] === "string" && options[key].length > 0)
+    return options[key];
+  return fallback;
+}
+
+function buildGlobalArgs(options = {}) {
+  const args = [];
+  if (options.db) args.push("--db", options.db);
+  if (options.logLevel) args.push("--log-level", options.logLevel);
+  if (options.logFormat) args.push("--log-format", options.logFormat);
+  return args;
+}
+
+function buildIdentityArgs(options = {}) {
+  const args = [];
+  if (options.workspaceId) args.push("--workspace-id", options.workspaceId);
+  if (options.userId) args.push("--user-id", options.userId);
+  if (options.agentId) args.push("--agent-id", options.agentId);
+  if (options.orgId) args.push("--org-id", options.orgId);
+  if (options.llmApiKey) args.push("--llm-api-key", options.llmApiKey);
+  if (options.llmBaseUrl) args.push("--llm-base-url", options.llmBaseUrl);
+  return args;
+}
+
+function spawnEden(bin, subcommand, args, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      reject(error);
+      return;
+    }
+    const child = spawn(bin, [subcommand, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      resolve({ code, stdout, stderr });
+    });
+    function onAbort() {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore cleanup failures.
+      }
+    }
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function tryParseJson(text) {
+  try {
+    const parsed = JSON.parse(text);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cleanErrorMessage(stderr) {
+  const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
+  // Prefer the last ERROR/ERR line; eden-memory logs structured errors.
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (/err\s*=|error:?/i.test(line)) {
+      const match = line.match(/err\s*=\s*["']([^"']+)["']|error:?\s*(.+)/i);
+      return match ? (match[1] ?? match[2]).trim() : line;
+    }
+  }
+  return lines.at(-1) ?? stderr.trim();
+}
+
+function normalizeTags(tags) {
+  if (!tags || tags.length === 0) return "";
+  return tags
+    .map((tag) =>
+      String(tag)
+        .trim()
+        .replace(/\|/g, "-")
+        .replace(/[^a-zA-Z0-9_\-]/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+    )
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildRememberContent(record) {
+  const tags = normalizeTags(record.tags);
+  if (!tags) return record.content;
+  return `${record.content}\n\nTags: ${tags}`;
+}
+
+/**
+ * Append a single structured ATP marker to the eden-memory durable store.
+ * Errors are caught and returned as a result object so lifecycle callers never
+ * throw on a failed memory write.
+ */
+export async function rememberRecord(record, options = {}, signal) {
+  const bin = options.bin ?? EDEN_DEFAULTS.bin;
+  const args = [
+    ...buildGlobalArgs(options),
+    "remember",
+    ...buildIdentityArgs(options),
+  ];
+  args.push("--content", buildRememberContent(record));
+  if (record.id) args.push("--id", record.id);
+  if (record.metadata && Object.keys(record.metadata).length > 0) {
+    args.push("--metadata", JSON.stringify(record.metadata));
+  }
+  try {
+    const { code, stdout, stderr } = await spawnEden(bin, "remember", args, signal);
+    if (code !== 0) {
+      const error = cleanErrorMessage(stderr || stdout);
+      return { ok: false, error, stderr: stderr || stdout };
+    }
+    const parsed = tryParseJson(stdout);
+    return {
+      ok: true,
+      id: parsed?.id,
+      status: parsed?.status,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Generate a document summary for a goal/topic from eden-memory. Used by the
+ * ATP recorder to produce stage summaries (stage 6 / archivist).
+ */
+export async function documentGoal(options, signal) {
+  const bin = options.bin ?? EDEN_DEFAULTS.bin;
+  const args = [
+    ...buildGlobalArgs(options),
+    "document",
+    ...buildIdentityArgs(options),
+  ];
+  if (options.goalId) args.push("--goal-id", options.goalId);
+  if (options.topic) args.push("--topic", options.topic);
+  if (options.audience) args.push("--audience", options.audience);
+  if (options.format) args.push("--format", options.format === "md" ? "markdown" : options.format);
+  if (options.limit !== undefined && Number.isFinite(options.limit)) args.push("--limit", String(options.limit));
+  try {
+    const { code, stdout, stderr } = await spawnEden(bin, "document", args, signal);
+    if (code !== 0) {
+      const error = cleanErrorMessage(stderr || stdout);
+      return { ok: false, error, stderr: stderr || stdout };
+    }
+    return { ok: true, output: stdout.trim() };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Check whether the configured eden-memory database is reachable. Returns
+ * `locked: true` when another process holds the SQLite lock.
+ */
+export async function health(options = {}) {
+  const bin = options.bin ?? EDEN_DEFAULTS.bin;
+  const args = [...buildGlobalArgs(options), "health"];
+  try {
+    const { code, stdout, stderr } = await spawnEden(bin, "health", args);
+    const output = (stderr || stdout).toLowerCase();
+    const locked = output.includes("locked by another eden-memory process") || output.includes("already locked");
+    if (code !== 0 || locked) {
+      const error = cleanErrorMessage(stderr || stdout);
+      return { ok: false, locked, error, stderr: stderr || stdout };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Resolve the effective eden-memory options from the project .env at runtime.
+ * Tests pass a custom env map to avoid touching process.env.
+ */
+export function resolveEdenOptions(env = process.env) {
+  const enabled = (env[EDEN_ENV_FIELDS.ENABLED] ?? "").toLowerCase();
+  if (enabled === "false" || enabled === "0" || enabled === "no" || enabled === "") {
+    // Returning an object with enabled implied false lets callers decide whether
+    // to skip the call. The wrapper itself remains usable when explicitly called.
+  }
+  return {
+    bin: env[EDEN_ENV_FIELDS.BIN] ?? EDEN_DEFAULTS.bin,
+    db: env[EDEN_ENV_FIELDS.DB] ?? EDEN_DEFAULTS.db,
+    workspaceId: env[EDEN_ENV_FIELDS.WORKSPACE_ID] ?? EDEN_DEFAULTS.workspaceId,
+    userId: env[EDEN_ENV_FIELDS.USER_ID] ?? EDEN_DEFAULTS.userId,
+    agentId: env[EDEN_ENV_FIELDS.AGENT_ID] ?? EDEN_DEFAULTS.agentId,
+    llmApiKey: env[EDEN_ENV_FIELDS.LLM_API_KEY],
+    llmBaseUrl: env[EDEN_ENV_FIELDS.LLM_BASE_URL],
+  };
+}
+
+/**
+ * Return the list of .env field names that are considered required for the
+ * integration, plus whether the semantic-search pair is required.
+ */
+export function getRequiredEnvFieldNames(semanticSearchEnabled) {
+  const base = [
+    EDEN_ENV_FIELDS.BIN,
+    EDEN_ENV_FIELDS.DB,
+    EDEN_ENV_FIELDS.WORKSPACE_ID,
+    EDEN_ENV_FIELDS.USER_ID,
+    EDEN_ENV_FIELDS.AGENT_ID,
+  ];
+  if (semanticSearchEnabled) {
+    base.push(EDEN_ENV_FIELDS.LLM_API_KEY, EDEN_ENV_FIELDS.LLM_BASE_URL);
+  }
+  return base;
+}
+
+export function getMissingRequiredEnvFields(env = process.env) {
+  const semanticSearchEnabled = (env[EDEN_ENV_FIELDS.SEMANTIC_SEARCH] ?? "").toLowerCase() === "true";
+  const required = getRequiredEnvFieldNames(semanticSearchEnabled);
+  return required.filter((name) => !env[name]?.trim());
+}
+
+export const _testing = {
+  buildGlobalArgs,
+  buildIdentityArgs,
+  buildRememberContent,
+  cleanErrorMessage,
+  normalizeTags,
+  spawnEden,
+};

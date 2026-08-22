@@ -1,4 +1,4 @@
-import { buildDashboardEntries, createDefaultTeamState, normalizePersistedTeamState } from "../config.js";
+import { createDefaultTeamState, normalizePersistedTeamState } from "../config.js";
 import { collectPendingRelayQuestions } from "../comms/relay-queue.js";
 import { compareWorkerIds } from "../types.js";
 import { addWorkerUsageToAggregate } from "../usage.js";
@@ -76,7 +76,6 @@ export class TaskRegistry {
         this.refreshDerivedState();
     }
     refreshDerivedState() {
-        this.state.ui.dashboardEntries = buildDashboardEntries(this.state.activeWorkers);
         this.state.ui.lastRenderAt = Date.now();
         this.state.relayQueue = collectPendingRelayQuestions(this.state.activeWorkers);
     }
