@@ -125,7 +125,7 @@ async function writeStageMarker(stage, content, options = {}, ctx = {}) {
     };
   }
   const record = buildRecord(stage, content, ctx);
-  const result = await rememberRecord(record, edenOptions, options.signal);
+  const result = await rememberRecord(record, edenOptions, options.signal, options.timeoutMs);
   if (options.edenMemoryStatus) {
     recordEdenMemoryMarker(options.edenMemoryStatus, {
       markerName: ATP_MARKER_NAMES[stage],
@@ -236,8 +236,8 @@ export async function recordWorkerPrune(prunedCount, usageTotals, options, ctx) 
  * Ask eden-memory to produce a goal/topic document from the durable record.
  * Safe wrapper: failures return an empty output rather than throwing.
  */
-export async function generateStageSummary(options, signal) {
-  const result = await documentGoal({ ...options, format: "md", audience: "agent" }, signal);
+export async function generateStageSummary(options, signal, timeoutMs) {
+  const result = await documentGoal({ ...options, format: "md", audience: "agent" }, signal, timeoutMs);
   return {
     ok: result.ok,
     output: result.output,

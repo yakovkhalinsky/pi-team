@@ -199,12 +199,16 @@ describe("ATP recorder", () => {
     assert.equal(researcher.ok, true);
     assert.equal(researcher.stage, "context-gathering");
     const verifier = await recordTerminalStageForProfile("verifier", "Passed", base);
+    assert.equal(verifier.ok, true);
     assert.equal(verifier.stage, "verification");
     const archivist = await recordTerminalStageForProfile("archivist", "Archived", base);
+    assert.equal(archivist.ok, true);
     assert.equal(archivist.stage, "recording-and-archival");
     const builder = await recordTerminalStageForProfile("builder", "Built", base);
+    assert.equal(builder.ok, true);
     assert.equal(builder.stage, "action");
     const runtime = await recordTerminalStageForProfile("runtime", "Deployed", base);
+    assert.equal(runtime.ok, true);
     assert.equal(runtime.stage, "action");
     const dispatcher = await recordTerminalStageForProfile("dispatcher", "Routed", base);
     assert.equal(dispatcher.skipped, true);

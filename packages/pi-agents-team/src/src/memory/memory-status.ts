@@ -4,8 +4,7 @@
  * Centralizes eden-memory health polling and async write result aggregation.
  * The tracker exposes a plain, mutable status object that UI code can read
  * on every render, and it updates itself when memory writes complete or when
- * a health check resolves. Notifications are one-time per distinct failure
- * signature (error message + lock flag).
+ * a health check resolves.
  */
 
 /**
@@ -27,10 +26,6 @@ function normalizeError(result) {
   } catch {
     return undefined;
   }
-}
-
-function notificationSignature(error, locked) {
-  return `${locked ? "locked:" : "err:"}${error ?? ""}`;
 }
 
 /**
@@ -86,20 +81,6 @@ export function createMemoryStatusTracker(options) {
 
   let timer;
   let runningHealthCheck = false;
-  let lastNotifiedSignature;
-
-  function maybeNotify() {
-    if (!status.enabled) return undefined;
-    const signature = notificationSignature(status.lastError, status.locked);
-    if (status.healthy === false || status.locked || status.lastError) {
-      if (lastNotifiedSignature === signature) return undefined;
-      lastNotifiedSignature = signature;
-      if (status.locked) return "Eden memory locked by another process";
-      if (status.lastError) return `Eden memory failed: ${status.lastError}`;
-      return "Eden memory unhealthy";
-    }
-    return undefined;
-  }
 
   function updateFromWriteResult(result) {
     status.lastWriteAt = nowMs();
@@ -126,7 +107,22 @@ export function createMemoryStatusTracker(options) {
     if (!options.enabled || !options.health || runningHealthCheck) return;
     runningHealthCheck = true;
     try {
-      const result = await options.health(options.edenOptions);
+      const timeoutMs = options.healthTimeoutMs ?? 10_000;
+      const timeout = new Promise((_, reject) => {
+        const id = setTimeout(
+          () => reject(new Error(`Eden-memory health check timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+        if (typeof id.unref === "function") id.unref();
+      });
+      const result = await Promise.race([
+        options.health(
+          options.edenOptions,
+          AbortSignal.timeout(timeoutMs),
+          timeoutMs,
+        ),
+        timeout,
+      ]);
       updateFromHealthResult(result);
     } catch (error) {
       updateFromHealthResult({
@@ -153,17 +149,12 @@ export function createMemoryStatusTracker(options) {
     timer = undefined;
   }
 
-  function consumeNotification() {
-    return maybeNotify();
-  }
-
   return {
     status,
     updateFromWriteResult,
     updateFromHealthResult,
     startPolling,
     stopPolling,
-    consumeNotification,
   };
 }
 
@@ -294,8 +285,6 @@ export function aggregateEdenMemoryStatus(teamStatus, workers) {
 
 export const _testing = {
   normalizeError,
-  notificationSignature,
   MAX_EVENT_HISTORY,
   aggregateEdenMemoryStatus,
 };
-

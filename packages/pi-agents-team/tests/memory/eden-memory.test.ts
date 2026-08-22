@@ -8,11 +8,13 @@ import {
   EDEN_ENV_FIELDS,
   rememberRecord,
   documentGoal,
+  search,
   health,
   resolveEdenOptions,
   getMissingRequiredEnvFields,
   getMissingRequiredEdenOptions,
   getRequiredEnvFieldNames,
+  _testing,
 } from "../../src/src/memory/eden-memory.js";
 
 function makeFakeBin(script: string): string {
@@ -111,6 +113,7 @@ describe("eden-memory wrapper", () => {
     const bin = makeFakeBin(`
 const args = process.argv.slice(2);
 if (args[0] !== "remember") { process.exit(1); }
+if (args[1] === "remember") { process.exit(1); }
 const metadataArg = args.indexOf("--metadata");
 if (metadataArg === -1 || !args[metadataArg + 1].includes('"marker"')) { process.exit(1); }
 console.log(JSON.stringify({ id: "mem-123", status: "remembered" }));
@@ -135,6 +138,17 @@ process.exit(1);
     );
     assert.equal(result.ok, false);
     assert.ok(result.error?.includes("database is locked") || result.error?.includes("already locked"), result.error);
+  });
+
+  it("checks health without duplicating the subcommand", async () => {
+    const bin = makeFakeBin(`
+const args = process.argv.slice(2);
+if (args[0] !== "health") { process.exit(1); }
+if (args[1] === "health") { process.exit(1); }
+console.log("ok");
+`);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" });
+    assert.equal(result.ok, true);
   });
 
   it("detects a locked database in health", async () => {
@@ -185,11 +199,41 @@ process.exit(1);
     const bin = makeFakeBin(`
 const args = process.argv.slice(2);
 if (args[0] !== "document") { process.exit(1); }
+if (args[1] === "document") { process.exit(1); }
 console.log("# Summary\\n\\nGoal summary text.");
 `);
     const result = await documentGoal({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", goalId: "g1", format: "md" });
     assert.equal(result.ok, true);
     assert.equal(result.output, "# Summary\n\nGoal summary text.");
+  });
+
+  it("searches memory records and parses the JSON response", async () => {
+    const bin = makeFakeBin(`
+const args = process.argv.slice(2);
+if (args[0] !== "search") { process.exit(1); }
+if (args[1] === "search") { process.exit(1); }
+const filtersArg = args.indexOf("--filters");
+if (filtersArg === -1 || !args[filtersArg + 1].includes('"stage"')) { process.exit(1); }
+console.log(JSON.stringify({ results: [{ id: "mem-1", content: "blocked task" }] }));
+`);
+    const result = await search(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", keywords: "blocked", filters: { stage: "goal-receipt" }, limit: 10 },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.results.length, 1);
+    assert.equal((result.results[0] as any).id, "mem-1");
+  });
+
+  it("returns empty results when search CLI exits non-zero", async () => {
+    const bin = makeFakeBin(`
+console.error('time=... level=ERROR msg="search failed" err="database is locked"');
+process.exit(1);
+`);
+    const result = await search(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", keywords: "blocked" },
+    );
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.results, []);
   });
 
   it("respects an abort signal", async () => {
@@ -200,6 +244,75 @@ setTimeout(() => { console.log(JSON.stringify({ id: "late" })); }, 2000);
     const promise = rememberRecord({ content: "test" }, { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, controller.signal);
     setTimeout(() => controller.abort(), 50);
     const result = await promise;
+    assert.equal(result.ok, false);
+  });
+
+  it("spawnEden rejects with a timeout error for a hanging child", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("done"); }, 60_000);
+`);
+    await assert.rejects(
+      () => _testing.spawnEden(bin, "health", [], { timeoutMs: 50 }),
+      /timed out/,
+    );
+  });
+
+  it("health returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("ok"); }, 60_000);
+`);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, undefined, 50);
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("rememberRecord returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log(JSON.stringify({ id: "late" })); }, 60_000);
+`);
+    const result = await rememberRecord(
+      { content: "test" },
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("documentGoal returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("summary"); }, 60_000);
+`);
+    const result = await documentGoal(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", goalId: "g1" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+  });
+
+  it("search returns a safe timeout result via timeoutMs", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log(JSON.stringify({ results: [] })); }, 60_000);
+`);
+    const result = await search(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", keywords: "blocked" },
+      undefined,
+      50,
+    );
+    assert.equal(result.ok, false);
+    assert.ok(result.error?.includes("timed out"), result.error);
+    assert.deepEqual(result.results, []);
+  });
+
+  it("AbortSignal.timeout aborts health before the wrapper timeout", async () => {
+    const bin = makeFakeBin(`
+setTimeout(() => { console.log("ok"); }, 60_000);
+`);
+    const signal = AbortSignal.timeout(50);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" }, signal, 10_000);
     assert.equal(result.ok, false);
   });
 });

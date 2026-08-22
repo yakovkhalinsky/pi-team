@@ -18,7 +18,6 @@ describe("memory/memory-status", () => {
       assert.equal(tracker.status.healthy, undefined);
       assert.equal(tracker.status.recordsWritten, 0);
       assert.equal(tracker.status.recordsFailed, 0);
-      assert.equal(tracker.consumeNotification(), undefined);
     });
 
     it("increments recordsWritten on successful writes", () => {
@@ -48,30 +47,6 @@ describe("memory/memory-status", () => {
       assert.equal(tracker.status.locked, true);
       assert.equal(tracker.status.lastError, "database is locked");
     });
-
-    it("notifies once per failure signature", () => {
-      const tracker = createMemoryStatusTracker({ enabled: true });
-      tracker.updateFromWriteResult({ ok: false, error: "boom" });
-      assert.equal(tracker.consumeNotification(), "Eden memory failed: boom");
-      assert.equal(tracker.consumeNotification(), undefined);
-      tracker.updateFromWriteResult({ ok: false, error: "boom" });
-      assert.equal(tracker.consumeNotification(), undefined);
-      tracker.updateFromWriteResult({ ok: false, error: "different" });
-      assert.equal(tracker.consumeNotification(), "Eden memory failed: different");
-    });
-
-    it("notifies once for locked state", () => {
-      const tracker = createMemoryStatusTracker({ enabled: true });
-      tracker.updateFromHealthResult({ ok: false, locked: true, error: "locked" });
-      assert.equal(tracker.consumeNotification(), "Eden memory locked by another process");
-      assert.equal(tracker.consumeNotification(), undefined);
-    });
-
-    it("does not notify when disabled", () => {
-      const tracker = createMemoryStatusTracker({ enabled: false });
-      tracker.updateFromWriteResult({ ok: false, error: "boom" });
-      assert.equal(tracker.consumeNotification(), undefined);
-    });
   });
 
   describe("polling", () => {
@@ -90,23 +65,28 @@ describe("memory/memory-status", () => {
       tracker.stopPolling();
       assert.ok(calls >= 1, `expected at least one health call, got ${calls}`);
       assert.equal(tracker.status.healthy, false);
-      assert.equal(tracker.consumeNotification(), "Eden memory failed: unreachable");
+      assert.equal(tracker.status.lastError, "unreachable");
     });
 
-    it("does not poll when disabled", async () => {
+    it("caps health checks with a timeout", async () => {
       let calls = 0;
       const tracker = createMemoryStatusTracker({
-        enabled: false,
-        health: async () => {
+        enabled: true,
+        health: async (_options, _signal, timeoutMs) => {
           calls += 1;
-          return { ok: true };
+          return new Promise((resolve) => {
+            setTimeout(() => resolve({ ok: true }), 60_000);
+          });
         },
+        healthTimeoutMs: 50,
         healthIntervalMs: 10,
       });
       tracker.startPolling();
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await new Promise((resolve) => setTimeout(resolve, 150));
       tracker.stopPolling();
-      assert.equal(calls, 0);
+      assert.ok(calls >= 1, `expected at least one health call, got ${calls}`);
+      assert.equal(tracker.status.healthy, false);
+      assert.ok(tracker.status.lastError?.includes("timed out"), tracker.status.lastError);
     });
   });
 

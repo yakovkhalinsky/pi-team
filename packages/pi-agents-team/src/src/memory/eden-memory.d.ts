@@ -43,6 +43,23 @@ export interface EdenDocumentResult {
   stderr?: string;
 }
 
+export interface EdenSearchOptions extends EdenMemoryOptions {
+  keywords?: string;
+  content?: string;
+  prefix?: string;
+  topic?: string;
+  id?: string;
+  filters?: Record<string, unknown>;
+  limit?: number;
+}
+
+export interface EdenSearchResult {
+  ok: boolean;
+  results: unknown[];
+  error?: string;
+  stderr?: string;
+}
+
 export interface EdenHealthResult {
   ok: boolean;
   locked?: boolean;
@@ -80,14 +97,26 @@ export function rememberRecord(
   record: EdenRememberRecord,
   options?: EdenMemoryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<EdenRememberResult>;
 
 export function documentGoal(
   options: EdenDocumentOptions & EdenMemoryOptions,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<EdenDocumentResult>;
 
-export function health(options?: EdenMemoryOptions): Promise<EdenHealthResult>;
+export function search(
+  options: EdenSearchOptions,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<EdenSearchResult>;
+
+export function health(
+  options?: EdenMemoryOptions,
+  signal?: AbortSignal,
+  timeoutMs?: number,
+): Promise<EdenHealthResult>;
 
 export function resolveEdenOptions(env?: Record<string, string | undefined>): EdenMemoryOptions;
 
@@ -107,6 +136,6 @@ export const _testing: {
     bin: string,
     subcommand: string,
     args: string[],
-    signal?: AbortSignal,
+    options?: { signal?: AbortSignal; timeoutMs?: number },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>;
 };

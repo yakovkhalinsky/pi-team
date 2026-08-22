@@ -1,7 +1,7 @@
 {
   "name": "pi-agents-team",
-  "version": "2026.8.5",
-  "description": "Pi extension that turns one coding session into a multi-agent team with background RPC worker agents.",
+  "version": "2027.0.0-path-a.0",
+  "description": "Path A thin native Pi extension for a multi-agent team with minimal shell, agent discovery, and stub delegation tools.",
   "license": "MIT",
   "type": "module",
   "author": {
@@ -41,6 +41,7 @@
   "files": [
     "dist",
     "README.md",
+    "MIGRATION.md",
     "LICENSE"
   ],
   "engines": {

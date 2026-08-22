@@ -1,41 +1,28 @@
 # Durable ATP record keeping with eden-memory
 
-Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. This document covers how to enable the integration, the required `.env` fields, the marker contract, and how to recover when the configured database is locked by another process.
+Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. This document covers how to enable the integration, the required `.env` fields, the marker contract, startup blocked-task detection, and how to recover when the configured database is locked by another process.
 
 ## Enabling the integration
 
-The eden-memory ATP integration is **enabled by default**. You can add an explicit `memory.edenMemory` block to your `agents-team.json` to override defaults or keep secrets out of the project `.env`:
+The eden-memory ATP integration is **controlled by environment variables** so it remains optional in the Path A thin extension. Set `EDEN_MEMORY_ENABLED=true` (or leave it unset, in which case it defaults to enabled) and configure the required base fields listed below. When `EDEN_MEMORY_ENABLED=false` or the required fields are missing, the extension behaves exactly as before: no memory writes are attempted and no startup checks are run.
 
-```json
-{
-  "schemaVersion": 4,
-  "enabled": true,
-  "memory": {
-    "edenMemory": {
-      "enabled": true,
-      "bin": "/home/yakov/.local/bin/eden-memory",
-      "db": "/home/yakov/.eden-memory/default.db",
-      "workspaceId": "default",
-      "userId": "yakov",
-      "agentId": "pi-agents-team",
-      "semanticSearch": false
-    }
-  },
-  "roles": {}
-}
+```bash
+export EDEN_MEMORY_ENABLED=true
+export EDEN_MEMORY_BIN=/home/yakov/.local/bin/eden-memory
+export EDEN_MEMORY_DB=/home/yakov/.eden-memory/default.db
+export EDEN_WORKSPACE_ID=default
+export EDEN_USER_ID=yakov
+export EDEN_AGENT_ID=pi-agents-team
 ```
 
-When `memory.edenMemory.enabled` is set to `false`, no memory writes happen and the extension behaves as before.
+If semantic document generation is enabled (`EDEN_MEMORY_SEMANTIC_SEARCH=true`), the LLM pair is also required:
 
-If the integration is enabled but the project `.env` is missing required fields, the extension prompts for them during the first UI session startup and writes the file for you. Values in `agents-team.json` override `.env` for any field they provide, so secrets (LLM keys) can stay in `.env` while shared defaults live in `agents-team.json`.
+```bash
+export EDEN_LLM_API_KEY=sk-...
+export EDEN_LLM_BASE_URL=https://api.openai.com/v1
+```
 
-After `/team-env` writes or updates `.env`, restart Pi or run `/reload` so the new environment variables are loaded.
-
-## Project `.env` fields
-
-Run `/team-env` to create or inspect the project `.env`. The command reports missing required fields and, in interactive sessions, prompts for values.
-
-### Required base fields
+## Required base fields
 
 | Variable | Purpose |
 |---|---|
@@ -45,16 +32,14 @@ Run `/team-env` to create or inspect the project `.env`. The command reports mis
 | `EDEN_USER_ID` | User identity for memory records. Default: `yakov`. |
 | `EDEN_AGENT_ID` | Agent identity for memory records. Default: `pi-agents-team`. |
 
-### Optional fields
+## Optional fields
 
 | Variable | Purpose |
 |---|---|
-| `EDEN_MEMORY_ENABLED` | `true`/`false` override. If absent, the config flag controls the integration. |
+| `EDEN_MEMORY_ENABLED` | `true`/`false` toggle. Defaults to enabled. |
 | `EDEN_MEMORY_SEMANTIC_SEARCH` | `true` to enable semantic document generation. |
 | `EDEN_LLM_API_KEY` | Required when semantic search is enabled. |
 | `EDEN_LLM_BASE_URL` | Required when semantic search is enabled. |
-
-The `/team-env` wizard fills in defaults for any missing base field. If semantic search is enabled, it also requires the LLM pair.
 
 ## ATP marker contract
 
@@ -88,6 +73,19 @@ The `--metadata` object includes:
 
 Memory writes are best-effort. A missing `.env`, a locked database, or an `eden-memory` CLI failure is returned as `{ ok: false, error, skipped }` and never thrown into the user-facing tool path.
 
+## Startup blocked/unfinished task detection
+
+On every `session_start`, when eden-memory is enabled and configured, the thin extension runs a lightweight health check and queries the durable store for potentially blocked or unfinished work:
+
+1. It searches memory for recent `[goal-received]` markers with the keywords `blocked` or `unfinished`.
+2. It searches for goals that have been received (`stage: goal-receipt`) but have not yet been closed (`stage: hand-off-or-closure`).
+3. The union of those goal IDs is surfaced as a short `pi-agents-team/memory-blocked-goals` entry via `pi.appendEntry`.
+4. A concise summary is also appended to the orchestrator system prompt injection (when project agents are present) so the orchestrator can decide whether to resume or ask about the work.
+
+The detection is heuristic: it relies on the marker text and the presence/absence of lifecycle stage markers in the same workspace/user/agent scope. It does not block session startup; if the query fails, the error is logged via `pi.appendEntry` and the session continues normally.
+
+Warnings are emitted during the startup sequence only. There is no per-session notification deduplication; the one-warning-per-session effect is a consequence of the startup-only logging, not an explicit deduplication mechanism.
+
 ## Stopping a conflicting eden-memory process
 
 eden-memory uses SQLite with an exclusive lock. If another process already holds the lock, writes fail with a message such as:
@@ -108,18 +106,12 @@ fuser /home/yakov/.eden-memory/default.db
 kill <PID>
 ```
 
-If the process is a long-running sync loop or relay server, it may need `SIGTERM` and a short wait, or `kill -9` if it does not respond. Once the lock is released, `/team-env` will report "eden-memory health check passed" and memory writes will succeed.
+If the process is a long-running sync loop or relay server, it may need `SIGTERM` and a short wait, or `kill -9` if it does not respond. Once the lock is released, memory writes will succeed.
 
 To avoid conflicts, use a project-local DB path instead of the global default:
 
-```json
-{
-  "memory": {
-    "edenMemory": {
-      "db": "./.eden-memory/project.db"
-    }
-  }
-}
+```bash
+export EDEN_MEMORY_DB=./.eden-memory/project.db
 ```
 
 The directory will be created by `eden-memory` on first write.
@@ -130,7 +122,7 @@ The `atp-recorder` module exposes `generateStageSummary(options, signal)` which 
 
 ## Testing
 
-Unit tests under `tests/memory/` mock the `eden-memory` CLI with temporary scripts so they do not require a real database or the global default DB. They cover record formatting, CLI invocation error paths, abort signals, and `.env` wizard logic. Run them with:
+Unit tests under `tests/memory/` mock the `eden-memory` CLI with temporary scripts so they do not require a real database or the global default DB. They cover record formatting, CLI invocation error paths, abort signals, `.env` resolution, and the new search wrapper. Run them with:
 
 ```bash
 npm test
