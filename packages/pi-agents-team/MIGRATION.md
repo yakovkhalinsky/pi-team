@@ -8,7 +8,7 @@ Path A is a major simplification of `pi-agents-team`. It removes the heavy orche
 - **Configuration moves from `agents-team.json` to `.pi/agents/*.md`.** Each role becomes a single Markdown file with YAML frontmatter plus a prompt body.
 - **Slash commands are reduced to `/agents`.** Use `/agents` to list discovered profiles.
 - **Delegation is handled by built-in tools.** The extension registers `delegate_task` and `wait_for_agents`; the old `agent_status`, `agent_result`, `agent_message`, `ping_agents`, and `agent_cancel` tools are removed.
-- **Removed custom runtime services.** Parallel git worktrees, custom session persistence, recovery reload, and eden-memory ATP record keeping are no longer part of the package.
+- **Eden-memory ATP integration is preserved (optional).** When `EDEN_MEMORY_ENABLED=true` and the required env fields are configured, the thin extension records ATP lifecycle markers and runs a startup blocked/unfinished-goals check. It no longer writes a project `.env` or shows a dashboard, but it still surfaces results via `pi.appendEntry` and the orchestrator prompt.
 - **Plain-JS compatibility is preserved.** The source is emitted JavaScript in `.ts` files; the runtime does not depend on TypeScript.
 
 ## Breaking changes
@@ -44,7 +44,7 @@ These orchestrator-facing tools are gone:
 
 - Custom session persistence and recovery.
 - Parallel git worktree creation and cleanup.
-- `eden-memory` ATP lifecycle markers and `.env` scaffolding.
+- The `/team-env` wizard, `.env` scaffolding, and eden-memory dashboard widgets (the interactive status UI is gone; the underlying ATP marker recording is preserved).
 - Interactive dashboard, cost tracking, console/activity/Raw views, and transcript copying.
 - `agents-team.json` schema, role merging, global/project config layering, and scaffold versioning.
 
@@ -199,7 +199,8 @@ It returns a compact JSON payload:
 - **Best-effort persistence.** The extension writes a single `pi-agents-team/state` entry via `pi.appendEntry` on load and session start, but worker transcripts, activity streams, and usage details are not persisted.
 - **No automatic recovery.** If the main Pi session exits, in-memory worker state is lost. Re-run `delegate_task` for any unfinished work.
 - **No parallel git worktrees.** Workers run in the directory supplied by `cwd` (defaulting to the orchestrator cwd). Manage worktrees externally if you need them.
-- **No eden-memory integration.** ATP lifecycle markers are no longer written to a SQLite store.
+- **No eden-memory dashboard.** ATP markers are still written to the configured SQLite store when enabled, but there is no TUI status widget or cost tab. Use the durable store directly if you need to inspect history.
+- **Eden-memory startup blocked-task check.** On `session_start`, the extension queries eden-memory for goals that look blocked or unfinished and appends a short summary to the orchestrator prompt. Failures are logged via `pi.appendEntry` and do not block startup.
 - **`agent_message` is gone.** Relay questions are surfaced by `wait_for_agents`; respond to them in the main session by calling `delegate_task` again or by updating the worker context directly.
 
 ## Rollback

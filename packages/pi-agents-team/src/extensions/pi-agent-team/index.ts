@@ -16,9 +16,21 @@ import { Type } from "typebox";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../../runtime/final-answer.js";
 import { cleanupTempPrompt, spawnWorker, writeTempPrompt } from "../../runtime/worker-spawn.js";
+import {
+  createMemoryStatusTracker,
+  findBlockedOrUnfinishedGoals,
+  formatBlockedGoalsSummary,
+  health,
+  recordGoalReceipt,
+  recordRecordingAndArchival,
+  recordRouting,
+  resolveEdenOptions,
+} from "../../src/memory/index.js";
 
 const STATE_CUSTOM_TYPE = "pi-agents-team/state";
 const AGENTS_MESSAGE_TYPE = "pi-agents-team/agents-list";
+const MEMORY_STATUS_TYPE = "pi-agents-team/memory-status";
+const MEMORY_BLOCKED_GOALS_TYPE = "pi-agents-team/memory-blocked-goals";
 
 function readPackageVersion() {
   try {
@@ -306,9 +318,15 @@ export const _testing = {
   isTerminalStatus,
   collectWorkerResult,
   formatRelayList,
+  resolveEdenOptions,
+  findBlockedOrUnfinishedGoals,
+  formatBlockedGoalsSummary,
 };
 
 export default function (pi, options = {}) {
+  let memoryTracker = null;
+  let lastBlockedGoals = [];
+
   function recordState() {
     try {
       pi.appendEntry(STATE_CUSTOM_TYPE, {
@@ -320,11 +338,89 @@ export default function (pi, options = {}) {
     }
   }
 
+  function logMemoryWarning(message) {
+    try {
+      pi.appendEntry(MEMORY_STATUS_TYPE, {
+        type: MEMORY_STATUS_TYPE,
+        level: "warning",
+        message,
+      });
+    } catch {
+      // Best-effort logging.
+    }
+  }
+
+  function recordWorkerCompletion(workerId, params, status) {
+    if (!memoryTracker?.status?.enabled) return;
+    const edenOptions = resolveEdenOptions(process.env);
+    void recordRecordingAndArchival(
+      `worker ${workerId} finished with status ${status}`,
+      { edenOptions, edenMemoryStatus: memoryTracker.status },
+      {
+        goalId: params.goal,
+        taskId: workerId,
+        workerId,
+        profileName: params.profileName,
+        packageName: "pi-agents-team",
+        status,
+      },
+    ).catch(() => {});
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     recordState();
     const agents = discoverAgents(ctx.cwd ?? process.cwd());
     if (agents.length > 0 && ctx?.hasUI) {
       ctx.ui.notify(`Pi Agents Team (Path A) loaded ${agents.length} agent profile(s).`, "info");
+    }
+
+    const edenOptions = resolveEdenOptions(process.env);
+    if (edenOptions.enabled === true) {
+      memoryTracker = createMemoryStatusTracker({
+        enabled: true,
+        health,
+        edenOptions,
+        healthIntervalMs: 60_000,
+      });
+      memoryTracker.startPolling();
+
+      void (async () => {
+        try {
+          const healthResult = await health(edenOptions);
+          memoryTracker.updateFromHealthResult(healthResult);
+          if (!healthResult.ok) {
+            logMemoryWarning(`Eden-memory health check failed: ${healthResult.error}`);
+            return;
+          }
+
+          const receiptResult = await recordGoalReceipt(
+            `session_start ${new Date().toISOString()}`,
+            { edenOptions, edenMemoryStatus: memoryTracker.status },
+            { packageName: "pi-agents-team" },
+          );
+          memoryTracker.updateFromWriteResult(receiptResult);
+
+          const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions);
+          if (blockedResult.ok) {
+            lastBlockedGoals = blockedResult.goals;
+            if (lastBlockedGoals.length > 0) {
+              try {
+                pi.appendEntry(MEMORY_BLOCKED_GOALS_TYPE, {
+                  type: MEMORY_BLOCKED_GOALS_TYPE,
+                  count: lastBlockedGoals.length,
+                  goals: lastBlockedGoals.slice(0, 10).map((g) => ({ goalId: g.goalId, reason: g.reason })),
+                });
+              } catch {
+                // Best-effort entry.
+              }
+            }
+          } else {
+            logMemoryWarning(`Eden-memory blocked-goals query failed: ${blockedResult.error}`);
+          }
+        } catch (err) {
+          logMemoryWarning(`Eden-memory startup check error: ${err?.message ?? String(err)}`);
+        }
+      })();
     }
   });
 
@@ -336,11 +432,16 @@ export default function (pi, options = {}) {
     if (agents.length === 0) return undefined;
 
     const block = buildAgentPromptBlock(agents);
+    const blockedSummary = formatBlockedGoalsSummary(lastBlockedGoals);
+    const injection = blockedSummary ? `${block}\n\n${blockedSummary}` : block;
+
     if (event.systemPrompt.includes(block)) {
-      return undefined;
+      return blockedSummary && !event.systemPrompt.includes(blockedSummary)
+        ? { systemPrompt: `${event.systemPrompt}\n\n${blockedSummary}` }
+        : undefined;
     }
 
-    return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
+    return { systemPrompt: `${event.systemPrompt}\n\n${injection}` };
   });
 
   pi.registerTool({
@@ -363,6 +464,21 @@ export default function (pi, options = {}) {
       }
 
       createWorkerRecord(workerId, params.profileName, params.title);
+
+      if (memoryTracker?.status?.enabled) {
+        const edenOptions = resolveEdenOptions(process.env);
+        void recordRouting(
+          `delegated "${params.title}" to ${params.profileName}`,
+          { edenOptions, edenMemoryStatus: memoryTracker.status },
+          {
+            goalId: params.goal,
+            taskId: workerId,
+            workerId,
+            profileName: params.profileName,
+            packageName: "pi-agents-team",
+          },
+        ).catch(() => {});
+      }
 
       let tmpFilePath = null;
       let tmpDir = null;
@@ -400,6 +516,7 @@ export default function (pi, options = {}) {
             stdout: result.stdout,
             exitCode: result.exitCode ?? null,
           });
+          recordWorkerCompletion(workerId, params, "error");
           return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
         }
 
@@ -412,6 +529,7 @@ export default function (pi, options = {}) {
             stdout: result.stdout,
             exitCode: result.exitCode ?? null,
           });
+          recordWorkerCompletion(workerId, params, "error");
           return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
         }
 
@@ -424,10 +542,12 @@ export default function (pi, options = {}) {
           stdout: result.stdout,
           exitCode: result.exitCode ?? 0,
         });
+        recordWorkerCompletion(workerId, params, "completed");
         return makeDelegateResult(workerId, "completed", workerResult);
       } catch (err) {
         const error = err?.message ?? String(err);
         settleWorker(workerId, { status: "error", error });
+        recordWorkerCompletion(workerId, params, "error");
         return makeDelegateResult(workerId, "error", {}, error);
       } finally {
         await cleanupTempPrompt(tmpFilePath, tmpDir);

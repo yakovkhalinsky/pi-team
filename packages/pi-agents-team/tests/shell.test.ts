@@ -1,7 +1,13 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import extensionFactory, { _testing } from "../src/extensions/pi-agent-team/index.js";
+import { EDEN_ENV_FIELDS } from "../src/src/memory/eden-memory.js";
+
+const ORIGINAL_ENV = { ...process.env };
 
 function createMockPi() {
   const tools: Array<{ name: string; def: any }> = [];
@@ -57,9 +63,78 @@ function createMockChild(stdout: string, stderr: string, exitCode: number) {
   return child;
 }
 
+function makeFakeEdenBin(): { bin: string; dir: string; log: string } {
+  const dir = mkdtempSync(join(tmpdir(), "eden-shell-test-"));
+  const bin = join(dir, "eden-memory");
+  const log = join(dir, "calls.log");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+const fs = require("fs");
+const args = process.argv.slice(2);
+const subcommand = args[0];
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ subcommand, args }) + "\\n");
+if (subcommand === "remember") {
+  console.log(JSON.stringify({ id: "mem-" + Date.now(), status: "remembered" }));
+} else if (subcommand === "health") {
+  console.log("ok");
+} else if (subcommand === "search") {
+  const filtersIndex = args.indexOf("--filters");
+  const filters = filtersIndex !== -1 ? args[filtersIndex + 1] : "{}";
+  const parsed = JSON.parse(filters);
+  if (parsed && parsed.stage === "goal-receipt") {
+    const keywordsIndex = args.indexOf("--keywords");
+    if (keywordsIndex !== -1 && args[keywordsIndex + 1].includes("blocked")) {
+      console.log(JSON.stringify({ results: [{ id: "mem-blocked", content: "[goal-received] goal:g1 blocked", metadata: { stage: "goal-receipt", goalId: "g1" } }] }));
+    } else {
+      console.log(JSON.stringify({ results: [{ id: "mem-g1", content: "[goal-received] goal:g1", metadata: { stage: "goal-receipt", goalId: "g1" } }] }));
+    }
+  } else if (parsed && parsed.stage === "hand-off-or-closure") {
+    console.log(JSON.stringify({ results: [] }));
+  } else {
+    console.log(JSON.stringify({ results: [] }));
+  }
+} else {
+  console.log(JSON.stringify({}));
+}
+`,
+    { mode: 0o700 },
+  );
+  return { bin, dir, log };
+}
+
+function setEdenEnv(bin: string): void {
+  process.env[EDEN_ENV_FIELDS.BIN] = bin;
+  process.env[EDEN_ENV_FIELDS.DB] = resolve(join(bin, ".."), "test.db");
+  process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
+  process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
+  process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
+  process.env[EDEN_ENV_FIELDS.ENABLED] = "true";
+}
+
 describe("Path A thin extension shell", () => {
+  let fakeEden: { bin: string; dir: string; log: string } | undefined;
+
   beforeEach(() => {
     _testing.clearWorkers();
+  });
+
+  afterEach(() => {
+    for (const key of Object.values(EDEN_ENV_FIELDS)) {
+      if (key in ORIGINAL_ENV) {
+        process.env[key] = ORIGINAL_ENV[key];
+      } else {
+        delete process.env[key];
+      }
+    }
+    if (fakeEden) {
+      try {
+        rmSync(fakeEden.dir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup failures
+      }
+      fakeEden = undefined;
+    }
   });
 
   it("registers delegate_task and wait_for_agents tools plus /agents command", () => {
@@ -502,5 +577,98 @@ describe("Path A thin extension shell", () => {
     assert.equal(ok!.result.headline, "ok");
     assert.equal(bad!.status, "error");
     assert.equal(bad!.error, "validation failed");
+  });
+
+  it("does not run eden-memory startup work when disabled", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
+
+    const memoryEntries = pi.entries.filter((e) => e.type.startsWith("pi-agents-team/memory"));
+    assert.equal(memoryEntries.length, 0, "should not write memory entries when disabled");
+  });
+
+  it("records eden-memory health, goal-receipt and blocked goals on session_start when enabled", async () => {
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
+
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const blockedGoalsEntry = pi.entries.find((e) => e.type === "pi-agents-team/memory-blocked-goals");
+    assert.ok(blockedGoalsEntry, "should record a blocked-goals entry");
+    assert.equal(blockedGoalsEntry.data.count, 1);
+    assert.equal(blockedGoalsEntry.data.goals[0].goalId, "g1");
+
+    const statusEntries = pi.entries.filter((e) => e.type === "pi-agents-team/memory-status");
+    assert.equal(statusEntries.length, 0, "no warnings should be logged when queries succeed");
+
+    const logLines = readFileSync(fakeEden.log, "utf-8").trim().split("\n").filter(Boolean);
+    const healthCall = logLines.some((line) => line.includes('"subcommand":"health"'));
+    assert.ok(healthCall, "should call eden-memory health");
+  });
+
+  it("records ATP routing and completion markers when delegate_task runs with eden-memory enabled", async () => {
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
+
+    const pi = createMockPi();
+    const mockSpawn = () =>
+      createMockChild(
+        "Some prelude\n<final_answer>\nheadline: did the thing\n\nresult body\n</final_answer>\n",
+        "",
+        0,
+      );
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    await tool.execute(
+      "call-memory",
+      { title: "Memory task", goal: "do the thing", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const log = readFileSync(fakeEden.log, "utf-8");
+    assert.ok(log.includes('"subcommand":"remember"'), "should record remember markers");
+    const rememberLines = log.split("\n").filter((line) => line.includes('"subcommand":"remember"'));
+    assert.ok(
+      rememberLines.some((line) => line.includes("[routing]")),
+      "should record a routing marker at delegation start",
+    );
+    assert.ok(
+      rememberLines.some((line) => line.includes("[recorded]")),
+      "should record a recording-and-archival marker at worker completion",
+    );
+  });
+
+  it("injects blocked goals summary into the orchestrator prompt when enabled", async () => {
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
+
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const handler = pi.handlers.get("before_agent_start")?.[0];
+    const result = await handler({ systemPrompt: "You are a helpful coding assistant." }, createMockContext());
+    assert.ok(result, "should return a modified prompt");
+    assert.ok(result.systemPrompt.includes("Eden-memory blocked/unfinished goals"), "should include blocked goals header");
+    assert.ok(result.systemPrompt.includes("g1"), "should mention the goal id");
   });
 });
