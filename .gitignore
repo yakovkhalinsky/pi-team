@@ -5,7 +5,9 @@ node_modules/
 *.log
 
 # Pi runtime
-.pi-team/
+.pi-team/*
+!.pi-team/reference/
+!.pi-team/reference/*.md
 .pi/agent/*-agents-team.json
 !.pi/agent/agents-team.json
 .pi/agent/agents-team.json.backup.*
