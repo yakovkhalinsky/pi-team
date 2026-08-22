@@ -2,15 +2,14 @@
 // Build pi-agents-team from TypeScript sources to dist/.
 // The TS sources are pure JS emitted by the original compile, so this script
 // performs a structural copy: .ts -> .js and .d.ts -> .d.ts, preserving
-// relative ESM import specifiers. Static assets (prompts/, profiles/) are
-// copied unchanged.
+// relative ESM import specifiers.
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
 const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
 const srcDir = join(root, "src");
 const distDir = join(root, "dist");
-const assetDirs = ["profiles", "prompts"];
+const assetDirs = [];
 
 async function exists(path) {
   try {
