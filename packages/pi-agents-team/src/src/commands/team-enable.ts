@@ -5,7 +5,7 @@ import { TeamProjectConfigSchema } from "../config.js";
 import { findNearestProjectConfigPath, getProjectConfigPathForScope } from "../project-config/loader.js";
 import { formatCommandWarning } from "../ui/display-grammar.js";
 import { TEAM_PROJECT_SCHEMA_VERSION } from "../types.js";
-import { atomicWriteFileSync } from "../util/backup.js";
+import { atomicWriteFileSync, backupExisting } from "../util/backup.js";
 function parseTeamEnableArgs(args) {
     const tokens = args.trim().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) {
@@ -114,9 +114,16 @@ export function persistRoutingMode(scope, routingMode, cwd) {
             warnings.push(`Warning: project-local config exists at ${localPath} and shadows this global routingMode in this project.`);
         }
     }
+    let backupPath;
+    if (existsSync(path)) {
+        backupPath = backupExisting(path);
+    }
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     atomicWriteFileSync(path, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
-    return warnings.length > 0 ? { path, warning: warnings.join("\n") } : { path };
+    if (warnings.length > 0) {
+        return { path, backupPath, warning: warnings.join("\n") };
+    }
+    return { path, backupPath };
 }
 export function runSetRoutingMode(mode, persist, ctx, deps, options = {}) {
     try {
@@ -154,6 +161,8 @@ export function runSetRoutingMode(mode, persist, ctx, deps, options = {}) {
         }
         else {
             lines.push(`Persisted routingMode=${mode} to ${result.path}.`);
+            if (result.backupPath)
+                lines.push(`Backed up previous config to ${result.backupPath}.`);
             if (result.warning)
                 lines.push(result.warning);
         }
