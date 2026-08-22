@@ -238,6 +238,13 @@ const WaitForAgentsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const AbortWorkerSchema = Type.Object(
+  {
+    workerId: Type.String({ description: "Worker id to terminate" }),
+  },
+  { additionalProperties: false },
+);
+
 const TERMINAL_STATUSES = new Set(["completed", "error", "exited", "aborted"]);
 
 export function isTerminalStatus(status) {
@@ -261,6 +268,40 @@ export function formatRelayList(pendingRelayQuestions) {
     question: q.question ?? q.text ?? "Unspecified relay question",
     askedAt: q.askedAt ?? Date.now(),
   }));
+}
+
+function extractAssistantText(event) {
+  if (typeof event !== "object" || event === null) return undefined;
+  if (event.type && event.type !== "message_update") return undefined;
+
+  const message = event.message ?? event.assistantMessageEvent ?? event.assistant_message ?? event;
+  if (message.role && message.role !== "assistant") return undefined;
+
+  const content = message.content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((part) => part && part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("");
+    return text || undefined;
+  }
+  if (typeof content === "string" && content.length > 0) return content;
+  if (typeof message.text === "string" && message.text.length > 0) return message.text;
+
+  return undefined;
+}
+
+function scanRelayQuestion(text) {
+  const relayMatch = /relay_question:\s*(.+?)(?=\n\s*(?:\w+:|<\/final_answer>)|$)/is.exec(text);
+  if (!relayMatch) return null;
+  const question = relayMatch[1].trim();
+  const assumptionMatch = /assumption:\s*(.+?)(?=\n\s*(?:\w+:|<\/final_answer>)|$)/is.exec(text);
+  const assumption = assumptionMatch?.[1]?.trim();
+  return {
+    question,
+    assumption,
+    questionId: `relay-${Math.random().toString(36).slice(2, 8)}`,
+  };
 }
 
 const workers = new Map();
@@ -300,7 +341,7 @@ function buildWorkerTaskText(params) {
   }
   const body = parts.join("");
   const instruction =
-    "When you are finished, wrap your complete final response in a single XML block: `<final_answer> ... </final_answer>`. Do not include any other content after this block.";
+    "When you are finished, wrap your complete final response in a single XML block: `<final_answer> ... <\/final_answer>`. Do not include any other content after this block.";
   return `${instruction}\n\n${body}`;
 }
 
@@ -474,7 +515,7 @@ export default function (pi, options = {}) {
         return makeDelegateResult(workerId, "error", {}, error);
       }
 
-      createWorkerRecord(workerId, params.profileName, params.title);
+      const record = createWorkerRecord(workerId, params.profileName, params.title);
 
       if (memoryTracker?.status?.enabled) {
         const edenOptions = resolveEdenOptions(process.env);
@@ -502,7 +543,29 @@ export default function (pi, options = {}) {
         }
 
         const task = buildWorkerTaskText(params);
-        const result = await spawnWorker({
+
+        const onLine = (line) => {
+          let assistantText;
+          try {
+            assistantText = extractAssistantText(JSON.parse(line));
+          } catch {
+            return;
+          }
+          if (!assistantText) return;
+          const relay = scanRelayQuestion(assistantText);
+          if (relay && record.pendingRelayQuestions.length === 0) {
+            record.pendingRelayQuestions.push({
+              workerId,
+              questionId: relay.questionId,
+              question: relay.assumption
+                ? `${relay.question} (assumption: ${relay.assumption})`
+                : relay.question,
+              askedAt: Date.now(),
+            });
+          }
+        };
+
+        const controller = spawnWorker({
           command: options.command ?? "pi",
           cwd,
           systemPromptPath: tmpFilePath ?? undefined,
@@ -513,7 +576,11 @@ export default function (pi, options = {}) {
           extraArgs: [task],
           timeoutMs: params.timeoutMs ?? 300_000,
           spawnImpl: options.spawnImpl,
+          signal: _signal,
+          onLine,
         });
+        record.controller = controller;
+        const result = await controller.promise;
 
         const finalAnswerText = extractFinalAnswer(result.stdout);
         const summary = finalAnswerText ? parseFinalAnswerSummaryFields(finalAnswerText) : {};
@@ -591,21 +658,6 @@ export default function (pi, options = {}) {
       }
 
       while (true) {
-        const allTerminal = ids.every((id) => {
-          const w = workers.get(id);
-          return w ? isTerminalStatus(w.status) : true;
-        });
-        if (allTerminal) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify({ reason: "all_terminal", workers: snapshotWorkers() }),
-              },
-            ],
-          };
-        }
-
         if (wakeOnRelay) {
           const relayQuestions = ids.flatMap((id) => {
             const w = workers.get(id);
@@ -629,6 +681,21 @@ export default function (pi, options = {}) {
           }
         }
 
+        const allTerminal = ids.every((id) => {
+          const w = workers.get(id);
+          return w ? isTerminalStatus(w.status) : true;
+        });
+        if (allTerminal) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ reason: "all_terminal", workers: snapshotWorkers() }),
+              },
+            ],
+          };
+        }
+
         if (Date.now() - start >= timeoutMs) {
           return {
             content: [
@@ -642,6 +709,93 @@ export default function (pi, options = {}) {
 
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
       }
+    },
+  });
+
+  pi.registerTool({
+    name: "abort_worker",
+    label: "Abort worker",
+    description: "Terminate a running delegated worker by worker id.",
+    parameters: AbortWorkerSchema,
+    async execute(_toolCallId, params) {
+      const record = workers.get(params.workerId);
+      if (!record) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ success: false, error: "Worker not found" }),
+            },
+          ],
+        };
+      }
+
+      if (isTerminalStatus(record.status)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: false,
+                workerId: record.workerId,
+                status: record.status,
+                error: `Worker already ${record.status}`,
+              }),
+            },
+          ],
+        };
+      }
+
+      const killed = record.controller?.child ? record.controller.kill() : false;
+      settleWorker(record.workerId, {
+        status: "aborted",
+        error: killed ? "Worker aborted" : "Worker abort requested",
+      });
+      recordWorkerCompletion(record.workerId, { goal: record.title, profileName: record.profileName }, "aborted");
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              workerId: record.workerId,
+              status: record.status,
+              killed,
+            }),
+          },
+        ],
+      };
+    },
+  });
+
+  pi.registerCommand("stop-worker", {
+    description: "Terminate a running delegated worker: /stop-worker \u003cworkerId\u003e",
+    handler: async (args, ctx) => {
+      const workerId = typeof args === "string" ? args.trim() : "";
+      const record = workers.get(workerId);
+      if (!record) {
+        sendAgentOutput(pi, ctx, `Worker "${workerId}" not found.`);
+        return;
+      }
+
+      if (isTerminalStatus(record.status)) {
+        sendAgentOutput(pi, ctx, `Worker ${workerId} is already ${record.status}.`);
+        return;
+      }
+
+      const killed = record.controller?.child ? record.controller.kill() : false;
+      settleWorker(workerId, {
+        status: "aborted",
+        error: killed ? "Worker aborted by command" : "Worker abort requested by command",
+      });
+      recordWorkerCompletion(workerId, { goal: record.title, profileName: record.profileName }, "aborted");
+
+      sendAgentOutput(
+        pi,
+        ctx,
+        `Worker ${workerId} aborted (${killed ? "kill sent" : "no running controller"}).`,
+      );
     },
   });
 
