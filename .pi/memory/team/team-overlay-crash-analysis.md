@@ -235,7 +235,7 @@ Before the thin-extension refactor lands, apply these defensive wrappers as a cr
 ## Path A Implementation Outcome
 
 **Status:** completed and verified on branch `path-a-shell`.  
-**Final commit hash:** `37976f5` (current HEAD of `path-a-shell` at the time of this update).  
+**Final commit hash:** `8685d75` (current HEAD of `path-a-shell` at the time of this update).  
 **Date:** 2026-08-22
 
 ### Summary of what was implemented
@@ -246,12 +246,21 @@ Before the thin-extension refactor lands, apply these defensive wrappers as a cr
 - **Text-only `/agents` summary command.** Replaces the interactive `/team` dashboard with a compact plain-text list of workers and statuses.
 - **`before_agent_start` orchestrator prompt injection.** Prepares the orchestrator with context before an agent worker starts.
 - **`pi.appendEntry` state recording.** Uses native Pi persistence instead of custom persistence machinery.
-- **Major cleanup.** Deleted the overlay UI, most `/team-*` commands, `agents-team.json`, custom persistence, the worktree manager, the eden-memory core integration, and the obsolete tools `agent_status`, `agent_result`, `agent_message`, `ping_agents`, and `agent_cancel`.
+- **Major cleanup.** Deleted the overlay UI, most `/team-*` commands, `agents-team.json`, custom persistence, the worktree manager, and the obsolete tools `agent_status`, `agent_result`, `agent_message`, `ping_agents`, and `agent_cancel`.
+- **Eden-memory preserved.** The eden-memory core integration was restored rather than removed; it now runs a lightweight startup check for blocked or unfinished goals and feeds the results into orchestrator context.
 - **Documentation.** Added a new `MIGRATION.md` and rewrote `README.md` for the thin-native model.
+
+### Eden-memory startup blocked/unfinished goal check
+
+- Eden-memory is now preserved in Path A.
+- A lightweight startup check queries eden-memory via the `search` CLI for blocked/unfinished goals.
+- Detected goals are surfaced through `pi.appendEntry` persistence and the `before_agent_start` orchestrator prompt injection.
+- ATP markers `[goal-received]`, `[routing]`, and `[recorded]` are written during session startup, `delegate_task`, and worker completion.
+- Detection is heuristic and relies on consistent marker metadata in the eden-memory search results.
 
 ### Verification results
 
-- **18 tests passing.**
+- **72 tests passing.**
 - **Build clean.**
 - **Typecheck clean.**
 - **Verifier:** APPROVE.
@@ -261,6 +270,8 @@ Before the thin-extension refactor lands, apply these defensive wrappers as a cr
 - No interactive dashboard remains; agent status is available only through the text `/agents` summary and tooling.
 - `wait_for_agents` state is kept **in-memory only**; it is not persisted across extension reloads.
 - Real `pi` spawn was **not exercised in automated tests**; the worker delegation path was tested against mocked/spawn-observed behavior.
+- Eden-memory goal detection is **heuristic**: it depends on the eden-memory `search` CLI returning consistent ATP marker metadata, so false positives or missed goals are possible.
+- Eden-memory CLI integration was exercised with mocked CLI behavior; a live eden-memory binary and populated memory store have not been validated in automated tests.
 
 ### Deferred point 5 (harness watchdog)
 
@@ -271,4 +282,5 @@ Point 5 from the earlier cancellation fix — a harness-level watchdog for stuck
 Before merging `path-a-shell` to `main`:
 
 1. **Smoke-test against a real `pi` binary.** Run a live `/agents` summary and a real `delegate_task` end-to-end to confirm worker spawn, relay, and `<final_answer>` extraction behave with the actual host.
-2. **Consider adding `package-lock.json`.** Reproducible installs will help CI and future contributors, especially now that the package surface has been reduced.
+2. **Smoke-test eden-memory in a live session.** Verify that blocked/unfinished goals are detected from a real eden-memory store and that the `before_agent_start` prompt injection surfaces them correctly.
+3. **Consider adding `package-lock.json`.** Reproducible installs will help CI and future contributors, especially now that the package surface has been reduced.
