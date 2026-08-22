@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { atomicWriteFileSync, backupExisting } from "../util/backup.js";
 import {
   EDEN_DEFAULTS,
   EDEN_ENV_FIELDS,
@@ -101,6 +102,35 @@ function findProjectEnvPath(cwd) {
   return resolve(cwd, ".env");
 }
 
+function findProjectGitignorePath(cwd) {
+  return resolve(cwd, ".gitignore");
+}
+
+function envIsAlreadyIgnored(gitignorePath) {
+  if (!existsSync(gitignorePath)) return false;
+  const text = readFileSync(gitignorePath, "utf8");
+  for (const raw of text.split("\n")) {
+    const line = raw.split("#")[0].trim();
+    if (!line) continue;
+    if (line === ".env") return true;
+    // A pattern like .env*, .env/, or .env? also covers the file.
+    if (line.startsWith(".env") && /[\/*?]/.test(line.slice(4, 5))) return true;
+  }
+  return false;
+}
+
+function ensureEnvIgnored(cwd) {
+  const gitignorePath = findProjectGitignorePath(cwd);
+  if (envIsAlreadyIgnored(gitignorePath)) return false;
+  let prefix = "";
+  if (existsSync(gitignorePath)) {
+    const existing = readFileSync(gitignorePath, "utf8");
+    if (existing.length > 0 && !existing.endsWith("\n")) prefix = "\n";
+  }
+  appendFileSync(gitignorePath, `${prefix}.env\n`);
+  return true;
+}
+
 function describeFieldName(name) {
   return FIELD_DESCRIPTIONS[name] ?? name;
 }
@@ -148,8 +178,16 @@ export async function runEnvWizard(ctx, force = false) {
   }
 
   mkdirSync(dirname(envPath), { recursive: true });
-  writeFileSync(envPath, buildEnvContents(entries), { mode: 0o600 });
+  if (existed) {
+    const backupPath = backupExisting(envPath);
+    report.push(`Backed up previous .env to ${backupPath}.`);
+  }
+  atomicWriteFileSync(envPath, buildEnvContents(entries), { mode: 0o600 });
+  const gitignoreUpdated = ensureEnvIgnored(ctx.cwd);
   report.push(`Wrote ${envPath}.`);
+  if (gitignoreUpdated) {
+    report.push(`Added .env to ${findProjectGitignorePath(ctx.cwd)}.`);
+  }
   report.push("Restart Pi or /reload the session for the new env vars to take effect.");
 
   // Surface lock conflicts immediately so the user knows to stop a conflicting
@@ -243,4 +281,7 @@ export const _testing = {
   promptMissingFields,
   readEnvFile,
   runEnvWizard,
+  ensureEnvIgnored,
+  envIsAlreadyIgnored,
+  findProjectGitignorePath,
 };

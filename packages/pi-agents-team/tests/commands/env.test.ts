@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -192,6 +192,84 @@ describe("/team-env command", () => {
     assert.ok(notification.message.includes("Project .env found at"), `unexpected message: ${notification.message}`);
     assert.ok(notification.message.includes("Everything is already configured"), `unexpected message: ${notification.message}`);
     assert.ok(notification.message.includes("All required eden-memory env fields are present"));
+  });
+
+  it("writes .env atomically without leaving temp files", async () => {
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    const result = await _testing.runEnvWizard(ctx, false);
+    assert.equal(result.updated, true);
+    const envPath = resolve(tmpDir, ".env");
+    assert.ok(existsSync(envPath), ".env should be created");
+    const text = readFileSync(envPath, "utf8");
+    assert.ok(text.includes(EDEN_ENV_FIELDS.DB));
+    const leftovers = readdirSync(tmpDir).filter((name) => name.startsWith(".env.tmp."));
+    assert.equal(leftovers.length, 0, "no atomic-write temp files should be left behind");
+  });
+
+  it("backs up an existing .env before overwriting", async () => {
+    const envPath = resolve(tmpDir, ".env");
+    const oldContent = `${EDEN_ENV_FIELDS.BIN}=/old-bin\n${EDEN_ENV_FIELDS.DB}=/old-db\n${EDEN_ENV_FIELDS.WORKSPACE_ID}=old-ws\n${EDEN_ENV_FIELDS.USER_ID}=old-user\n${EDEN_ENV_FIELDS.AGENT_ID}=old-agent\n${EDEN_ENV_FIELDS.SEMANTIC_SEARCH}=false\n`;
+    writeFileSync(envPath, oldContent);
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    const result = await _testing.runEnvWizard(ctx, true);
+    assert.equal(result.updated, true);
+    assert.ok(result.report.some((line) => line.startsWith("Backed up previous .env to")));
+    const backups = readdirSync(tmpDir).filter((name) => /^\d{4}-\d{2}-\d{2}-\d{6}-\.env/.test(name));
+    assert.equal(backups.length, 1, "exactly one timestamped backup should exist");
+    assert.equal(readFileSync(resolve(tmpDir, backups[0]), "utf8"), oldContent);
+    assert.ok(existsSync(envPath), ".env should still exist after backup and overwrite");
+  });
+
+  it("appends .env to .gitignore when missing", async () => {
+    const gitignorePath = resolve(tmpDir, ".gitignore");
+    writeFileSync(gitignorePath, "node_modules/\n");
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    const result = await _testing.runEnvWizard(ctx, false);
+    assert.equal(result.updated, true);
+    assert.ok(result.report.some((line) => line.includes("Added .env to")));
+    const gitignoreText = readFileSync(gitignorePath, "utf8");
+    assert.ok(gitignoreText.includes(".env\n"));
+    assert.ok(gitignoreText.startsWith("node_modules/\n.env\n"), "should append .env on its own line");
+  });
+
+  it("creates .gitignore with .env when none exists", async () => {
+    const gitignorePath = resolve(tmpDir, ".gitignore");
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    const result = await _testing.runEnvWizard(ctx, false);
+    assert.equal(result.updated, true);
+    assert.ok(existsSync(gitignorePath));
+    assert.equal(readFileSync(gitignorePath, "utf8"), ".env\n");
+  });
+
+  it("does not duplicate .env in .gitignore when already present", async () => {
+    const gitignorePath = resolve(tmpDir, ".gitignore");
+    writeFileSync(gitignorePath, "node_modules/\n.env\n");
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    const result = await _testing.runEnvWizard(ctx, true);
+    assert.equal(result.updated, true);
+    assert.ok(!result.report.some((line) => line.includes("Added .env to")));
+    const gitignoreText = readFileSync(gitignorePath, "utf8");
+    const matches = gitignoreText.split("\n").filter((line) => line.trim() === ".env");
+    assert.equal(matches.length, 1, ".env should appear exactly once");
+  });
+
+  it("treats .env* and .env/ in .gitignore as already covering .env", async () => {
+    for (const pattern of [".env*", ".env/"]) {
+      const gitignorePath = resolve(tmpDir, ".gitignore");
+      writeFileSync(gitignorePath, `${pattern}\n`);
+      const ctx = createCtx(tmpDir);
+      ctx.ui.confirm = async () => false;
+      const result = await _testing.runEnvWizard(ctx, true);
+      assert.equal(result.updated, true);
+      assert.ok(!result.report.some((line) => line.includes("Added .env to")), `should not append for ${pattern}`);
+      const gitignoreText = readFileSync(gitignorePath, "utf8");
+      assert.equal(gitignoreText.trim(), pattern);
+    }
   });
 
   it("check mode reports a complete .env at info level", async () => {
