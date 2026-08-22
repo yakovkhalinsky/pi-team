@@ -1,5 +1,6 @@
 # Pi Team runtime
 .pi-team/
-.pi/npm/
+.pi/npm/node_modules/
+.pi/npm/*.log
 .pi/settings.json
 .pi/agent/agents-team.json.backup.*

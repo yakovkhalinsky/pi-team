@@ -1,0 +1,1804 @@
+import { Input, matchesKey, SelectList, truncateToWidth, visibleWidth, } from "@earendil-works/pi-tui";
+import { BorderedLoader } from "@earendil-works/pi-coding-agent";
+import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../runtime/final-answer.js";
+import {} from "../types.js";
+import { aggregateWorkerUsage, hasWorkerUsage } from "../usage.js";
+import { copyToClipboard } from "../util/clipboard.js";
+import { buildCopyPayload } from "./copy-payload.js";
+import { buildActionSummaryLine, buildCompactTeamSummaryLine, buildNarrowInspectText, buildNarrowTeamDashboardText, buildRosterSections, buildTeamDashboardText, buildWorkerPrioritySnippet } from "./dashboard.js";
+import { formatRetainedTranscript } from "./transcript-retention.js";
+import { formatCacheUsage, formatCompactTokenCount, formatContextBudget } from "./usage-format.js";
+import { formatWorkerLabel, formatWorkerStatusLabel, getWorkerAttentionDisplay, getWorkerAttentionPriority, getWorkerPrimaryAction } from "./display-grammar.js";
+import { formatAgentMessageResult } from "./tool-formatters.js";
+import { FRAME, stripAnsi, sanitizeTerminalText, fallbackPalette, themedPalette } from "./theme.js";
+// The overlay is a single-instance custom component. Styling helpers delegate
+// to a mutable palette so the Pi Theme object supplied by ctx.ui.custom can be
+// applied, invalidated, and rebuilt without threading a palette through every
+// standalone helper signature.
+let currentPalette = fallbackPalette;
+const fallbackTheme = {
+    fg(role, text) {
+        if (!text)
+            return text;
+        if (role === "accent")
+            return fallbackPalette.accent(text);
+        if (role === "success")
+            return fallbackPalette.success(text);
+        if (role === "warning")
+            return fallbackPalette.warning(text);
+        if (role === "error")
+            return fallbackPalette.danger(text);
+        if (role === "dim" || role === "muted" || role === "border")
+            return fallbackPalette.muted(text);
+        return text;
+    },
+    bold: fallbackPalette.bold,
+    inverse: fallbackPalette.inverse,
+};
+function isUsableTheme(theme) {
+    return !!theme
+        && typeof theme.fg === "function"
+        && typeof theme.bold === "function"
+        && typeof theme.inverse === "function";
+}
+function resolveTheme(theme) {
+    return isUsableTheme(theme) ? theme : fallbackTheme;
+}
+const bold = (text) => currentPalette.bold(text);
+const dim = (text) => currentPalette.dim(text);
+const muted = (text) => currentPalette.muted(text);
+const accent = (text) => currentPalette.accent(text);
+const accentBold = (text) => currentPalette.accentBold(text);
+const success = (text) => currentPalette.success(text);
+const successBold = (text) => currentPalette.successBold(text);
+const warning = (text) => currentPalette.warning(text);
+const warningBold = (text) => currentPalette.warningBold(text);
+const danger = (text) => currentPalette.danger(text);
+const dangerBold = (text) => currentPalette.dangerBold(text);
+const inverse = (text) => currentPalette.inverse(text);
+function setPalette(theme) {
+    // The factory may hand us an empty object in tests; only switch to a real
+    // Pi Theme when the expected callbacks are present so styling never breaks.
+    if (isUsableTheme(theme)) {
+        currentPalette = themedPalette(theme);
+    }
+    else {
+        currentPalette = fallbackPalette;
+    }
+}
+// Pi-tui has no "push main pane" primitive: overlays float on top of the
+// main chat. We anchor to the bottom-right at 40% width and 40% height so the
+// overlay stays out of the chat input area and remains usable on narrow
+// terminals via responsive visibility.
+export const TEAM_DASHBOARD_OVERLAY_OPTIONS = {
+    anchor: "bottom-right",
+    width: "40%",
+    minWidth: 30,
+    maxHeight: "40%",
+    margin: 0,
+    visible: (termWidth) => termWidth >= 80,
+};
+// Must match TEAM_DASHBOARD_OVERLAY_OPTIONS.maxHeight. Pi-tui clips returned
+// lines to the overlay's pixel rectangle; if our render produces more rows
+// than the panel can display, the bottom (frame + footer) gets cut. Compute
+// our row budget from this constant, not from terminal rows directly.
+const OVERLAY_HEIGHT_PCT = 0.4;
+const ROSTER_PAGE_SIZE = 30;
+const TAB_ORDER = ["workers", "inspect", "console", "cost"];
+const TAB_LABELS = {
+    workers: "Workers",
+    inspect: "Inspect",
+    console: "Console",
+    cost: "Cost",
+};
+const REUSABLE_STATUSES = new Set(["idle", "waiting_followup"]);
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(value, max));
+}
+function formatTimestamp(ts) {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+}
+function appendList(lines, label, values) {
+    if (values.length === 0)
+        return;
+    lines.push(dim(label));
+    for (const value of values)
+        lines.push(`  ${value}`);
+}
+function inspectSection(label, palette = currentPalette) {
+    return palette.accentBold(label);
+}
+function inspectDivider(label, palette = currentPalette) {
+    return palette.accent(FRAME.horizontal.repeat(2)) + " " + inspectSection(label, palette) + " " + palette.accent(FRAME.horizontal.repeat(2));
+}
+function inspectField(label, value, palette = currentPalette) {
+    return `  ${palette.dim(label)} ${value}`;
+}
+function formatUsage(worker) {
+    const parts = [
+        `turns=${worker.usage.turns}`,
+        `in=${formatCompactTokenCount(worker.usage.inputTokens)}`,
+        `out=${formatCompactTokenCount(worker.usage.outputTokens)}`,
+        formatCacheUsage(worker.usage),
+        `cost=$${worker.usage.costUsd.toFixed(4)}`,
+        formatContextBudget(worker.usage),
+    ].filter((part) => Boolean(part));
+    return parts.join("  ");
+}
+function hasClampedThinking(worker) {
+    return worker.requestedThinkingLevel !== worker.effectiveThinkingLevel;
+}
+function formatThinking(worker, palette) {
+    if (!hasClampedThinking(worker))
+        return worker.effectiveThinkingLevel;
+    return palette.warning(`${worker.requestedThinkingLevel} -> ${worker.effectiveThinkingLevel} (clamped)`);
+}
+function formatRosterProfileName(worker) {
+    return `${worker.profileName}${hasClampedThinking(worker) ? " (clamped)" : ""}`;
+}
+function compactActivityLine(event) {
+    const label = sanitizeTerminalText(event.label);
+    const command = event.command ? sanitizeTerminalText(event.command) : undefined;
+    const summary = event.summary ? sanitizeTerminalText(event.summary) : undefined;
+    const toolName = event.toolName ? sanitizeTerminalText(event.toolName) : undefined;
+    if (event.actionKind === "command")
+        return `• Ran ${command ?? summary ?? label.replace(/^Ran\s+/, "")}`;
+    if (event.actionKind === "tool")
+        return `• ${label.startsWith("Used ") ? label : `Used ${toolName ?? label}`}`;
+    if (event.actionKind === "process" && summary)
+        return `• ${label}: ${summary}`;
+    if (event.actionKind === "final_summary")
+        return "• Final answer produced";
+    if (event.actionKind === "error" && summary)
+        return `• Error: ${summary}`;
+    return undefined;
+}
+function buildRecentActivityRows(worker, transcript, consoleEvents, activityEvents) {
+    const rows = (activityEvents && activityEvents.length > 0 ? activityEvents : synthesizeActivity([], consoleEvents ?? []))
+        .map(compactActivityLine)
+        .filter((line) => Boolean(line))
+        .filter((line, index, all) => all.indexOf(line) === index)
+        .slice(-4);
+    const transcriptLines = sanitizeTerminalText(transcript ?? "").trim().split("\n").filter(Boolean);
+    const latestThinking = transcriptLines.length <= 3 ? transcriptLines.slice(-1)[0] : undefined;
+    if (latestThinking && !rows.some((line) => line.includes(latestThinking)))
+        rows.push(`• Thinking: ${latestThinking}`);
+    if (worker.finalAnswer && !rows.includes("• Final answer produced"))
+        rows.push("• Final answer produced");
+    return rows;
+}
+function formatInspectStatus(worker, palette) {
+    const label = worker.status;
+    if (worker.status === "completed" || worker.status === "idle")
+        return palette.successBold(label);
+    if (worker.status === "error" || worker.status === "aborted")
+        return palette.dangerBold(label);
+    if (worker.status === "waiting_followup" || worker.status === "starting" || worker.status === "running")
+        return palette.warningBold(label);
+    return palette.muted(label);
+}
+function inspectBlockHeader(label, palette, badge) {
+    const suffix = badge ? ` [${badge}]` : "";
+    return `${palette.accent(`${FRAME.topLeft}${FRAME.horizontal} `)}${palette.accentBold(label)}${suffix}${palette.accent(` ${FRAME.horizontal}`)}`;
+}
+function inspectBlockFooter(palette) {
+    return palette.accent(`${FRAME.bottomLeft}${FRAME.horizontal}`);
+}
+function inspectBlockLine(line, palette, options = {}) {
+    const content = options.structured ? formatStructuredLine(line, classifyTextLine(line).kind) : line;
+    return `${palette.accent(FRAME.vertical)} ${content}`;
+}
+function pushInspectBlock(lines, label, body, palette, badge, options = {}) {
+    if (lines.length > 0)
+        lines.push("");
+    lines.push(inspectBlockHeader(label, palette, badge));
+    for (const line of body.length > 0 ? body : ["(none)"])
+        lines.push(inspectBlockLine(line, palette, options));
+    lines.push(inspectBlockFooter(palette));
+}
+function pushInspectList(body, label, values, palette) {
+    if (values.length === 0)
+        return;
+    body.push(palette.dim(label));
+    for (const value of values)
+        body.push(`  ${value}`);
+}
+function buildInspectText(worker, transcript, consoleEvents, activityEvents, palette) {
+    const lines = [];
+    const reusable = REUSABLE_STATUSES.has(worker.status) ? "  [reusable]" : "";
+    const statusBody = [
+        `${worker.workerId} · ${worker.profileName} · ${formatInspectStatus(worker, palette)}${reusable}`,
+        `${palette.dim("Usage:")} ${formatUsage(worker)}`,
+        `${palette.dim("Thinking:")} ${formatThinking(worker, palette)}`,
+    ];
+    if (worker.lastToolName)
+        statusBody.push(`${palette.dim("Last tool:")} ${sanitizeTerminalText(worker.lastToolName)}`);
+    if (worker.error)
+        statusBody.push(`${palette.dim("Error:")} ${palette.danger(sanitizeTerminalText(worker.error))}`);
+    pushInspectBlock(lines, "Status", statusBody, palette, formatInspectStatus(worker, palette));
+    const recentActivity = buildRecentActivityRows(worker, transcript, consoleEvents, activityEvents);
+    if (recentActivity.length > 0)
+        pushInspectBlock(lines, "Recent activity", recentActivity, palette);
+    const taskBody = [];
+    if (worker.currentTask) {
+        taskBody.push(worker.currentTask.title);
+        if (worker.currentTask.goal)
+            taskBody.push(`${palette.dim("Goal:")} ${worker.currentTask.goal}`);
+        if (worker.currentTask.expectedOutput)
+            taskBody.push(`${palette.dim("Expected:")} ${worker.currentTask.expectedOutput}`);
+        pushInspectList(taskBody, "Context:", worker.currentTask.contextHints, palette);
+        if (worker.currentTask.pathScope)
+            pushInspectList(taskBody, "Path scope:", worker.currentTask.pathScope.roots, palette);
+    }
+    else {
+        taskBody.push("(none)");
+    }
+    pushInspectBlock(lines, "Task", taskBody, palette);
+    const operatorBody = [];
+    if (worker.pendingRelayQuestions.length === 0) {
+        operatorBody.push("(none)");
+    }
+    else {
+        for (const relay of worker.pendingRelayQuestions) {
+            operatorBody.push(`${warningBold(`[${relay.urgency}]`)} ${sanitizeTerminalText(relay.question)}`);
+            operatorBody.push(`${palette.dim("Assumption:")} ${sanitizeTerminalText(relay.assumption)}`);
+        }
+    }
+    pushInspectBlock(lines, "Needs operator", operatorBody, palette, worker.pendingRelayQuestions.length > 0 ? "attention" : undefined);
+    const summaryBody = [];
+    if (worker.lastSummary) {
+        summaryBody.push(`${palette.dim("Headline:")} ${sanitizeTerminalText(worker.lastSummary.headline)}`);
+        pushInspectList(summaryBody, "Read files:", worker.lastSummary.readFiles.map(sanitizeTerminalText), palette);
+        pushInspectList(summaryBody, "Changed files:", worker.lastSummary.changedFiles.map(sanitizeTerminalText), palette);
+        pushInspectList(summaryBody, "Risks:", worker.lastSummary.risks.map(sanitizeTerminalText), palette);
+        if (worker.lastSummary.nextRecommendation)
+            summaryBody.push(`${palette.dim("Next:")} ${sanitizeTerminalText(worker.lastSummary.nextRecommendation)}`);
+    }
+    else {
+        summaryBody.push("(no summary captured yet)");
+    }
+    pushInspectBlock(lines, "Summary", summaryBody, palette);
+    const finalAnswer = sanitizeTerminalText(worker.finalAnswer ?? "").trim();
+    const assistantText = formatRetainedTranscript(transcript);
+    pushInspectBlock(lines, "Final answer", (finalAnswer || "(no <final_answer> block produced)").split("\n"), palette, worker.finalAnswer ? "ok" : undefined, { structured: true });
+    pushInspectBlock(lines, "Latest assistant text", (assistantText || "(no assistant text captured)").split("\n"), palette, assistantText ? "tail" : undefined, { structured: true });
+    return lines.join("\n");
+}
+function styleConsoleEventKind(event) {
+    const label = `[${event.kind}]`;
+    if (event.kind === "error")
+        return dangerBold(label);
+    if (event.kind === "exit" || /\brecover(?:y|ed|ing)?\b/i.test(sanitizeTerminalText(event.text)))
+        return warningBold(label);
+    return dim(label);
+}
+function styleConsoleEventText(event) {
+    const text = sanitizeTerminalText(event.text);
+    if (event.kind === "error")
+        return danger(text);
+    if (event.kind === "exit" || /\brecover(?:y|ed|ing)?\b/i.test(text))
+        return warning(text);
+    return text;
+}
+function formatConsoleEvent(event) {
+    return `${dim(`[${formatTimestamp(event.ts)}]`)} ${styleConsoleEventKind(event)} ${styleConsoleEventText(event)}`;
+}
+function formatFinalAnswerFields(fields, summary) {
+    if (!fields || Object.keys(fields).length === 0)
+        return summary ? [summary] : [];
+    const lines = [];
+    if (fields.headline)
+        lines.push(`${bold("Headline:")} ${sanitizeTerminalText(fields.headline)}`);
+    for (const risk of fields.risks ?? [])
+        lines.push(`${bold("Risks:")} ${sanitizeTerminalText(risk)}`);
+    if (fields.nextRecommendation)
+        lines.push(`${bold("Next:")} ${sanitizeTerminalText(fields.nextRecommendation)}`);
+    return lines;
+}
+function formatActivityStatus(status) {
+    switch (status) {
+        case "completed":
+            return successBold("ok");
+        case "error":
+            return dangerBold("error");
+        case "started":
+            return warningBold("running");
+        case "info":
+            return muted("info");
+    }
+}
+function formatActivityHeaderLabel(event) {
+    const label = sanitizeTerminalText(event.label);
+    const toolName = event.toolName ? sanitizeTerminalText(event.toolName) : undefined;
+    if (event.actionKind === "command")
+        return `tool ${toolName ?? "command"}`;
+    if (event.actionKind === "tool")
+        return `tool ${toolName ?? label.replace(/^Used\s+/, "")}`;
+    if (event.actionKind === "process")
+        return `process ${label.toLowerCase()}`;
+    if (event.actionKind === "final_summary")
+        return "final-answer";
+    return label.toLowerCase().replace(/\s+/g, "-");
+}
+function formatActivityFooter(event) {
+    const parts = [];
+    if (event.updatedAt > event.ts) {
+        const seconds = (event.updatedAt - event.ts) / 1000;
+        parts.push(`took ${seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)}s`);
+    }
+    parts.push("raw:r");
+    return parts.join(" · ");
+}
+function styleDiffStatLine(line) {
+    let styled = "";
+    for (const char of line) {
+        if (char === "+")
+            styled += success(char);
+        else if (char === "-")
+            styled += danger(char);
+        else
+            styled += char;
+    }
+    return styled
+        .replace(/(\d+\s+insertions?\(\+\))/g, (match) => success(match))
+        .replace(/(\d+\s+deletions?\(-\))/g, (match) => danger(match));
+}
+function styleActivityOutputLine(line) {
+    const safeLine = sanitizeTerminalText(line);
+    const plain = stripAnsi(safeLine);
+    if (/^(diff --git|@@\s|index\s|\+\+\+\s|---\s)/.test(plain))
+        return accent(safeLine);
+    if (/^\+(?!\+\+)/.test(plain))
+        return success(safeLine);
+    if (/^-(?!---)/.test(plain))
+        return danger(safeLine);
+    if (/\|\s*\d+\s+[+\-]+\s*$/.test(plain) || /\b\d+ files? changed\b/.test(plain))
+        return styleDiffStatLine(safeLine);
+    return safeLine;
+}
+function formatActivityEvent(event) {
+    const header = `${FRAME.topLeft}${FRAME.horizontal} ${formatActivityHeaderLabel(event)} [${formatActivityStatus(event.status)}] ${muted(formatTimestamp(event.ts))} ${FRAME.horizontal}`;
+    const lines = [event.status === "error" ? dangerBold(header) : accent(header)];
+    const pushBody = (line) => {
+        lines.push(`${accent(FRAME.vertical)} ${line}`);
+    };
+    if (event.actionKind === "command") {
+        const command = event.command ? sanitizeTerminalText(event.command) : undefined;
+        const summary = event.summary ? sanitizeTerminalText(event.summary) : undefined;
+        const label = sanitizeTerminalText(event.label);
+        pushBody(`${accentBold("$")} ${command ?? summary ?? label.replace(/^Ran\s+/, "")}`);
+        if (summary && summary !== command)
+            pushBody(`${dim("detail:")} ${summary}`);
+    }
+    else if (event.actionKind === "final_summary") {
+        for (const line of formatFinalAnswerFields(event.finalSummaryFields, event.summary ? sanitizeTerminalText(event.summary) : undefined))
+            pushBody(line);
+    }
+    else if (event.summary) {
+        pushBody(sanitizeTerminalText(event.summary));
+    }
+    if (event.outputSnippet) {
+        for (const line of sanitizeTerminalText(event.outputSnippet).split("\n"))
+            pushBody(styleActivityOutputLine(line));
+    }
+    if ((event.hiddenLineCount ?? 0) > 0)
+        pushBody(muted(`… +${event.hiddenLineCount} lines hidden`));
+    lines.push(accent(`${FRAME.bottomLeft}${FRAME.horizontal} ${formatActivityFooter(event)}`));
+    return lines;
+}
+function synthesizeActivity(chunks, consoleEvents) {
+    const activity = [];
+    let id = 0;
+    let pendingText = "";
+    let pendingStart;
+    let pendingEndTs = 0;
+    const flushPendingText = () => {
+        const summary = pendingText.trim();
+        if (!summary || !pendingStart) {
+            pendingText = "";
+            pendingStart = undefined;
+            pendingEndTs = 0;
+            return;
+        }
+        activity.push({
+            id: `chunk:${id++}`,
+            ts: pendingStart.ts,
+            updatedAt: pendingEndTs || pendingStart.ts,
+            actionKind: "process",
+            status: "info",
+            label: "Thinking",
+            summary,
+            sourceEvent: "worker_text_flush",
+        });
+        pendingText = "";
+        pendingStart = undefined;
+        pendingEndTs = 0;
+    };
+    const separatorVariants = ["", "_", "-", " ", "\t", "\n"];
+    const openTags = separatorVariants.map((separator) => `<final${separator}answer>`);
+    const closeTags = separatorVariants.map((separator) => `</final${separator}answer>`);
+    const findFirstTag = (text, tags) => {
+        const lowerText = text.toLowerCase();
+        let first;
+        for (const tag of tags) {
+            const index = lowerText.indexOf(tag.toLowerCase());
+            if (index >= 0 && (!first || index < first.index))
+                first = { index, tag: text.slice(index, index + tag.length) };
+        }
+        return first;
+    };
+    const longestTagPrefixSuffix = (text, tags) => {
+        const lowerText = text.toLowerCase();
+        let longest = "";
+        for (const tag of tags) {
+            const lowerTag = tag.toLowerCase();
+            for (let length = 1; length < lowerTag.length && length <= lowerText.length; length += 1) {
+                if (length > longest.length && lowerText.endsWith(lowerTag.slice(0, length)))
+                    longest = text.slice(text.length - length);
+            }
+        }
+        return longest;
+    };
+    let normalCarry = "";
+    let normalCarryStart;
+    let finalAnswerStart;
+    let finalAnswerRaw = "";
+    let finalAnswerEndTs = 0;
+    let closeCarry = "";
+    const appendPendingText = (text, chunk) => {
+        if (!text || !chunk)
+            return;
+        pendingStart ??= chunk;
+        pendingEndTs = chunk.ts;
+        if (pendingText && !/\s$/.test(pendingText) && !/^\s/.test(text))
+            pendingText += "\n";
+        pendingText += text;
+    };
+    const emitFinalAnswer = () => {
+        const finalAnswer = extractFinalAnswer(finalAnswerRaw);
+        if (!finalAnswer) {
+            appendPendingText(finalAnswerRaw, finalAnswerStart);
+        }
+        else {
+            activity.push({
+                id: `chunk:${id++}`,
+                ts: finalAnswerStart?.ts ?? finalAnswerEndTs,
+                updatedAt: finalAnswerEndTs || finalAnswerStart?.ts || 0,
+                actionKind: "final_summary",
+                status: "completed",
+                label: "Final answer",
+                summary: finalAnswer.replace(/\s+/g, " ").trim(),
+                sourceEvent: "worker_text_flush",
+                finalSummaryFields: parseFinalAnswerSummaryFields(finalAnswer),
+            });
+        }
+        finalAnswerStart = undefined;
+        finalAnswerRaw = "";
+        finalAnswerEndTs = 0;
+        closeCarry = "";
+    };
+    for (const chunk of chunks) {
+        let chunkText = sanitizeTerminalText(chunk.text);
+        let chunkStart = chunk;
+        while (chunkText.length > 0 || normalCarry || closeCarry) {
+            if (finalAnswerStart) {
+                const text = closeCarry + chunkText;
+                const closeMatch = findFirstTag(text, closeTags);
+                if (closeMatch) {
+                    finalAnswerRaw += text.slice(0, closeMatch.index) + closeMatch.tag;
+                    finalAnswerEndTs = chunk.ts;
+                    emitFinalAnswer();
+                    chunkText = text.slice(closeMatch.index + closeMatch.tag.length);
+                    closeCarry = "";
+                    chunkStart = chunk;
+                    continue;
+                }
+                const suffix = longestTagPrefixSuffix(text, closeTags);
+                const safeText = suffix ? text.slice(0, -suffix.length) : text;
+                finalAnswerRaw += safeText;
+                if (safeText || suffix)
+                    finalAnswerEndTs = chunk.ts;
+                closeCarry = suffix;
+                break;
+            }
+            const text = normalCarry + chunkText;
+            const textStart = normalCarry ? normalCarryStart : chunkStart;
+            const openMatch = findFirstTag(text, openTags);
+            if (openMatch) {
+                appendPendingText(text.slice(0, openMatch.index), textStart);
+                flushPendingText();
+                finalAnswerStart = textStart ?? chunk;
+                finalAnswerRaw = openMatch.tag;
+                finalAnswerEndTs = chunk.ts;
+                chunkText = text.slice(openMatch.index + openMatch.tag.length);
+                normalCarry = "";
+                normalCarryStart = undefined;
+                chunkStart = chunk;
+                continue;
+            }
+            const suffix = longestTagPrefixSuffix(text, openTags);
+            const safeText = suffix ? text.slice(0, -suffix.length) : text;
+            appendPendingText(safeText, textStart);
+            normalCarry = suffix;
+            normalCarryStart = suffix ? (textStart ?? chunk) : undefined;
+            break;
+        }
+    }
+    if (finalAnswerStart)
+        appendPendingText(finalAnswerRaw + closeCarry, finalAnswerStart);
+    else
+        appendPendingText(normalCarry, normalCarryStart);
+    flushPendingText();
+    for (let index = 0; index < consoleEvents.length; index += 1) {
+        const event = consoleEvents[index];
+        if (event.kind === "tool_start") {
+            const next = consoleEvents.slice(index + 1).find((candidate) => candidate.kind === "tool_end" && candidate.ts >= event.ts);
+            const eventText = sanitizeTerminalText(event.text);
+            const outputLines = next ? sanitizeTerminalText(next.text).split("\n") : [];
+            const hiddenMatch = outputLines.find((line) => /… \+\d+ lines hidden/.test(line));
+            activity.push({
+                id: `event:${id++}`,
+                ts: event.ts,
+                updatedAt: next?.ts ?? event.ts,
+                actionKind: "command",
+                status: next?.kind === "tool_end" ? "completed" : "started",
+                label: `Ran ${eventText}`,
+                summary: eventText,
+                command: eventText,
+                outputSnippet: outputLines.filter((line) => !/… \+\d+ lines hidden/.test(line)).join("\n"),
+                hiddenLineCount: hiddenMatch ? Number(/… \+(\d+) lines hidden/.exec(hiddenMatch)?.[1] ?? 0) : undefined,
+                sourceEvent: "worker_text_flush",
+            });
+        }
+        else if (event.kind === "error" || event.kind === "exit" || event.kind === "queue") {
+            activity.push({
+                id: `event:${id++}`,
+                ts: event.ts,
+                updatedAt: event.ts,
+                actionKind: event.kind,
+                status: event.kind === "error" ? "error" : "info",
+                label: event.kind === "error" ? "Worker error" : event.kind === "exit" ? "Worker exited" : "Messages queued",
+                summary: sanitizeTerminalText(event.text),
+                sourceEvent: "worker_text_flush",
+            });
+        }
+    }
+    return activity.sort((a, b) => a.ts - b.ts || a.updatedAt - b.updatedAt);
+}
+function buildRawConsoleLines(worker, chunks, consoleEvents) {
+    if (chunks.length === 0 && consoleEvents.length === 0) {
+        return [`${worker.workerId} · ${worker.profileName} · ${worker.status}`, "", accentBold("— raw —"), "(no console activity yet)"];
+    }
+    const lines = [`${worker.workerId} · ${worker.profileName} · ${worker.status}  ·  chunks=${chunks.length}  events=${consoleEvents.length}  ·  raw`, "", accentBold("— raw —")];
+    const entries = [
+        ...chunks.map((chunk) => ({ ts: chunk.ts, order: chunk.index, lines: [`[raw] assistant chunk #${chunk.index}`, ...sanitizeTerminalText(chunk.text).split("\n")] })),
+        ...consoleEvents.map((event, order) => ({ ts: event.ts, order, lines: sanitizeTerminalText(event.text).split("\n").map((line) => `[raw] ${event.kind} ${line}`) })),
+    ].sort((a, b) => a.ts - b.ts || a.order - b.order);
+    for (const entry of entries)
+        lines.push(...entry.lines);
+    lines.push("", accentBold("— assistant —"));
+    for (const chunk of chunks)
+        lines.push(dim(`[${formatTimestamp(chunk.ts)}]`), ...sanitizeTerminalText(chunk.text).split("\n"));
+    lines.push("", accentBold("— events —"));
+    for (const event of consoleEvents)
+        lines.push(formatConsoleEvent(event));
+    return lines;
+}
+function buildConsoleLines(worker, chunks, consoleEvents, activityEvents, mode = "activity") {
+    if (mode === "raw")
+        return buildRawConsoleLines(worker, chunks, consoleEvents);
+    const activity = (activityEvents && activityEvents.length > 0 ? activityEvents : synthesizeActivity(chunks, consoleEvents));
+    if (activity.length === 0) {
+        return [`${worker.workerId} · ${worker.profileName} · ${worker.status}`, "", accentBold("— activity —"), dim("(no activity yet — press r for raw logs)")];
+    }
+    const lines = [`${worker.workerId} · ${worker.profileName} · ${worker.status}  ·  chunks=${chunks.length}  events=${consoleEvents.length}  activity=${activity.length}  ·  raw:r`, "", accentBold("— activity —")];
+    activity.forEach((event, index) => {
+        if (index > 0)
+            lines.push("");
+        lines.push(...formatActivityEvent(event));
+    });
+    return lines;
+}
+function formatCachePart(usage) {
+    const cache = formatCacheUsage(usage);
+    return cache ? `  ${cache}` : "";
+}
+function buildCostLines(state) {
+    const workers = Object.values(state.activeWorkers);
+    const total = aggregateWorkerUsage(workers, state.prunedWorkerUsageTotals);
+    const retained = state.prunedWorkerUsageTotals;
+    if (workers.length === 0 && !hasWorkerUsage(retained))
+        return ["(no tracked workers)"];
+    const rows = [];
+    if (hasWorkerUsage(retained)) {
+        rows.push(`retained/pruned: workers=${retained.workers}  turns=${retained.turns}  in=${formatCompactTokenCount(retained.inputTokens)}  out=${formatCompactTokenCount(retained.outputTokens)}${formatCachePart(retained)}  cost=$${retained.costUsd.toFixed(4)}`);
+    }
+    for (const worker of workers) {
+        rows.push(`  ${worker.workerId.padEnd(6)} ${worker.profileName.padEnd(12)} turns=${worker.usage.turns}  in=${formatCompactTokenCount(worker.usage.inputTokens)}  out=${formatCompactTokenCount(worker.usage.outputTokens)}${formatCachePart(worker.usage)}  cost=$${worker.usage.costUsd.toFixed(4)}`);
+    }
+    return [
+        `Σ workers=${total.workers}  turns=${total.turns}  in=${formatCompactTokenCount(total.inputTokens)}  out=${formatCompactTokenCount(total.outputTokens)}${formatCachePart(total)}  cost=$${total.costUsd.toFixed(4)}`,
+        "",
+        ...(rows.length > 0 ? rows : ["(no tracked workers)"]),
+    ];
+}
+function getAttentionOrderedWorkerIds(state) {
+    return buildRosterSections(state).flatMap((section) => section.workers.map((worker) => worker.workerId));
+}
+// Worker output frequently contains tabs and other control bytes whose
+// visibleWidth (1) does not match the terminal's rendered width. Normalize
+// before any measurement. ESC (0x1b) is preserved so our own ANSI styling
+// (theme.ts) and pi-tui's ANSI-aware truncate keep working.
+function sanitizeText(text) {
+    return text
+        .replace(/\t/g, "    ")
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/g, "");
+}
+// Strip our own styling before classifying so worker text wrapped in ANSI
+// (e.g. a colored `# heading` from a tool) still matches the structural regexes.
+function classifyTextLine(line) {
+    const plain = stripAnsi(line);
+    if (/^\s{4,}\S/.test(plain))
+        return { kind: "code", continuation: plain.match(/^\s*/)?.[0] ?? "" };
+    if (/^\s{2,}\S/.test(plain))
+        return { kind: "plain", continuation: plain.match(/^\s*/)?.[0] ?? "" };
+    if (/^\s*(?:at\s+\S|Caused by:|\.{3}\s+\d+\s+more|[A-Za-z_.$][\w.$<>]*Error:)/.test(plain))
+        return { kind: "stack", continuation: "    " };
+    if (/^\s*#{1,6}\s+\S/.test(plain))
+        return { kind: "heading", continuation: dim("↳ ") };
+    if (/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(plain)) {
+        const marker = plain.match(/^(\s*)(?:[-*+]\s+|\d+[.)]\s+)/)?.[0] ?? "";
+        return { kind: "list", continuation: " ".repeat(visibleWidth(marker)) };
+    }
+    if (/^\s*\|.*\|\s*$/.test(plain))
+        return { kind: "table", continuation: dim("↳ ") };
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(plain) || /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(plain)) {
+        return { kind: "separator", continuation: dim("↳ ") };
+    }
+    return { kind: "plain", continuation: dim("↳ ") };
+}
+function formatStructuredLine(line, kind) {
+    switch (kind) {
+        case "heading":
+            return accentBold(line);
+        case "separator":
+            return dim(line);
+        default:
+            return line;
+    }
+}
+function wrapTextLine(raw, width) {
+    const shape = classifyTextLine(raw);
+    const first = formatStructuredLine(raw, shape.kind);
+    if (visibleWidth(first) <= width)
+        return [first];
+    const out = [];
+    let remaining = raw;
+    let prefix = "";
+    let guard = 0;
+    while (visibleWidth(prefix + remaining) > width && guard < 1000) {
+        const available = Math.max(1, width - visibleWidth(prefix));
+        let head = truncateToWidth(remaining, available, "");
+        if (shape.kind !== "code" && visibleWidth(head) === available) {
+            const breakAt = head.search(/\s+\S*$/);
+            if (breakAt > Math.floor(available * 0.45))
+                head = head.slice(0, breakAt);
+        }
+        // truncateToWidth can return "" when the next visible glyph is wider than
+        // `available` (e.g. wide CJK char at width=1, or an ANSI escape boundary).
+        // Force-consume one code unit so the loop always makes progress instead of
+        // breaking and leaving an oversized `remaining` for enforceWidth to ellipsize.
+        if (head.length === 0)
+            head = remaining.slice(0, 1);
+        out.push(prefix + (out.length === 0 ? formatStructuredLine(head, shape.kind) : head));
+        const rest = remaining.slice(head.length);
+        // Code-like lines keep their internal indentation across wrap chunks so
+        // hand-aligned ASCII (stack frames, indented logs) does not collapse.
+        remaining = shape.kind === "code" ? rest : rest.trimStart();
+        prefix = visibleWidth(shape.continuation) < width ? shape.continuation : "";
+        guard += 1;
+    }
+    if (remaining.length > 0)
+        out.push(prefix + remaining);
+    return out;
+}
+function wrapLines(text, width) {
+    if (width <= 0)
+        return [];
+    return sanitizeText(text).split("\n").flatMap((raw) => wrapTextLine(raw, width));
+}
+function enforceWidth(lines, width) {
+    return lines.map((line) => {
+        const safe = sanitizeText(line);
+        return visibleWidth(safe) > width ? truncateToWidth(safe, width, "…") : safe;
+    });
+}
+function padToWidth(line, width) {
+    const safe = sanitizeText(line);
+    const truncated = visibleWidth(safe) > width ? truncateToWidth(safe, width, "…") : safe;
+    const padding = Math.max(0, width - visibleWidth(truncated));
+    return truncated + " ".repeat(padding);
+}
+class LabeledInput {
+    input;
+    label;
+    focused = false;
+    onSubmit;
+    onEscape;
+    constructor(label) {
+        this.label = label;
+        this.input = new Input();
+        this.input.onSubmit = (value) => this.onSubmit?.(value);
+        this.input.onEscape = () => this.onEscape?.();
+    }
+    getValue() {
+        return this.input.getValue();
+    }
+    setValue(value) {
+        this.input.setValue(value);
+    }
+    handleInput(data) {
+        if (data === "\r" || data === "\n") {
+            this.onSubmit?.(this.input.getValue());
+            return;
+        }
+        if (data.includes("\n") || data.includes("\r")) {
+            this.input.handleInput(data.replace(/\r\n|\r|\n/g, " "));
+            return;
+        }
+        this.input.handleInput(data);
+    }
+    render(width) {
+        this.input.focused = this.focused;
+        const labelWidth = visibleWidth(this.label);
+        if (width <= labelWidth) {
+            return [truncateToWidth(this.label, width, "…")];
+        }
+        const inputWidth = width - labelWidth + 2;
+        const lines = this.input.render(Math.max(3, inputWidth));
+        return lines.map((line) => {
+            if (line.startsWith("> ")) {
+                return this.label + line.slice(2);
+            }
+            return truncateToWidth(this.label + line, width, "…");
+        });
+    }
+    invalidate() {
+        this.input.invalidate();
+    }
+}
+class RosterSelectList {
+    snapshot;
+    selectedWorkerId;
+    constructor(snapshot, selectedWorkerId) {
+        this.snapshot = snapshot;
+        this.selectedWorkerId = selectedWorkerId;
+    }
+    invalidate() { }
+    render(width, rowBudget = ROSTER_PAGE_SIZE) {
+        const items = [];
+        for (const section of buildRosterSections(this.snapshot)) {
+            if (section.workers.length === 0)
+                continue;
+            items.push({
+                value: `__section__${section.key}`,
+                label: colorForGroupBold(section.key)(`${section.label} (${section.workers.length})`),
+            });
+            for (const worker of section.workers) {
+                const base = `${worker.workerId} · ${formatRosterProfileName(worker)} · ${worker.status}${REUSABLE_STATUSES.has(worker.status) ? " [reuse]" : ""} · ${buildWorkerPrioritySnippet(worker)}`;
+                items.push({ value: worker.workerId, label: colorForWorker(worker)(base) });
+            }
+        }
+        if (items.length === 0) {
+            return [dim("No tracked workers. Press [n] to delegate one.")];
+        }
+        const workerIndices = items
+            .map((item, index) => (item.value.startsWith("__section__") ? -1 : index))
+            .filter((index) => index >= 0);
+        const selectedIndex = this.selectedWorkerId
+            ? workerIndices.find((index) => items[index].value === this.selectedWorkerId)
+            : undefined;
+        const safeSelectedIndex = selectedIndex ?? workerIndices[0] ?? 0;
+        const theme = {
+            selectedText: (text) => bold(text),
+            selectedPrefix: (text) => text,
+            description: (text) => text,
+            scrollInfo: (text) => text,
+            noMatch: (text) => text,
+        };
+        const visibleRows = Math.max(1, Math.min(rowBudget, ROSTER_PAGE_SIZE));
+        const itemRows = items.length > visibleRows && visibleRows > 1 ? visibleRows - 1 : visibleRows;
+        const list = new SelectList(items, Math.min(items.length, itemRows), theme);
+        list.setSelectedIndex(safeSelectedIndex);
+        return list.render(width).map((line) => {
+            const plain = stripAnsi(line);
+            if (plain.startsWith("→ ")) {
+                const arrowIndex = line.indexOf("→ ");
+                return line.slice(0, arrowIndex) + "▶ " + line.slice(arrowIndex + 2);
+            }
+            return line;
+        });
+    }
+}
+function computeOverlayRows(termRows) {
+    // Match the overlay's maxHeight so the returned line count fits the panel
+    // rectangle exactly. Without this, pi-tui truncates our output and the
+    // bottom frame + footer disappear.
+    return Math.max(1, Math.floor(termRows * OVERLAY_HEIGHT_PCT));
+}
+function frameRow(content, totalWidth) {
+    if (totalWidth <= 2)
+        return accent(FRAME.vertical).repeat(totalWidth);
+    if (totalWidth <= 4) {
+        const innerWidth = Math.max(0, totalWidth - 2);
+        const truncated = innerWidth === 0 ? "" : truncateToWidth(content, innerWidth, "");
+        return `${accent(FRAME.vertical)}${truncated}${accent(FRAME.vertical)}`;
+    }
+    const innerWidth = totalWidth - 4;
+    const padded = padToWidth(content, innerWidth);
+    const sides = accent(FRAME.vertical);
+    return `${sides} ${padded} ${sides}`;
+}
+function frameTopWithTitle(titleStyled, totalWidth) {
+    if (totalWidth <= 2) {
+        return accent(FRAME.topLeft) + accent(FRAME.horizontal.repeat(Math.max(0, totalWidth - 1)));
+    }
+    const titleVisible = visibleWidth(titleStyled);
+    const inner = totalWidth - 2;
+    const titleFragment = ` ${titleStyled} `;
+    const titleVisibleWithPad = titleVisible + 2;
+    if (titleVisibleWithPad >= inner) {
+        return accent(FRAME.topLeft) + truncateToWidth(titleFragment, inner, "…") + accent(FRAME.topRight);
+    }
+    const remaining = inner - titleVisibleWithPad;
+    const leftPad = Math.min(2, remaining);
+    const rightFill = remaining - leftPad;
+    const top = `${accent(FRAME.topLeft)}${accent(FRAME.horizontal.repeat(leftPad))}${titleFragment}${accent(FRAME.horizontal.repeat(rightFill))}${accent(FRAME.topRight)}`;
+    return top;
+}
+function frameBottom(totalWidth) {
+    if (totalWidth <= 0)
+        return "";
+    if (totalWidth === 1)
+        return accent(FRAME.bottomLeft);
+    const inner = totalWidth - 2;
+    const bottom = `${accent(FRAME.bottomLeft)}${accent(FRAME.horizontal.repeat(inner))}${accent(FRAME.bottomRight)}`;
+    return bottom;
+}
+// When `rows` doesn't fit `maxRows`, keep the top/bottom borders and drop
+// middle content. If a `hint` row is provided, surface it as the last visible
+// middle row so operators see why the panel looks empty instead of just blank chrome.
+function clampFramedRows(rows, maxRows, hint) {
+    if (rows.length <= maxRows)
+        return rows;
+    if (maxRows <= 0)
+        return [];
+    if (maxRows === 1)
+        return [rows[0] ?? ""];
+    const top = rows[0] ?? "";
+    const bottom = rows[rows.length - 1] ?? "";
+    if (maxRows === 2)
+        return [top, bottom];
+    const middle = rows.slice(1, maxRows - 1);
+    if (hint !== undefined && middle.length > 0)
+        middle[middle.length - 1] = hint;
+    return [top, ...middle, bottom];
+}
+export function buildTabBar(active, routingMode, displayCost = true) {
+    const visibleTabs = displayCost ? TAB_ORDER : TAB_ORDER.filter((tab) => tab !== "cost");
+    const cells = visibleTabs.map((tab) => {
+        const num = TAB_ORDER.indexOf(tab) + 1;
+        const label = `${num} ${TAB_LABELS[tab]}`;
+        return tab === active ? accentBold(`[${label}]`) : dim(` ${label} `);
+    });
+    const badge = routingMode === "solo" ? `  · ${warningBold("solo")}` : "";
+    return cells.join(" ") + badge;
+}
+const ACTION_BAR_KEYS = [
+    { key: "s", label: "teer" },
+    { key: "m", label: "sg" },
+    { key: "n", label: "ew" },
+    { key: "c", label: "lose" },
+    { key: "x", label: "cancel" },
+    { key: "p", label: "rune" },
+    { key: "r", label: "efresh" },
+    { key: "y", label: "copy" },
+    { key: "q", label: "uit" },
+];
+function buildActionBar(overrides = {}) {
+    return ACTION_BAR_KEYS.map(({ key, label }) => `[${accentBold(key)}]${dim(overrides[key] ?? label)}`).join(" ");
+}
+function firstFitting(width, candidates) {
+    return candidates.find((candidate) => visibleWidth(candidate) <= width) ?? candidates[candidates.length - 1] ?? "";
+}
+function buildSelectedWorkerHeader(worker, width) {
+    if (!worker)
+        return firstFitting(width, ["selected: none · action: delegate new", "selected: none", "none"]);
+    const attention = getWorkerAttentionDisplay(getWorkerAttentionPriority(worker)).label;
+    const status = formatWorkerStatusLabel(worker);
+    const action = getWorkerPrimaryAction(worker);
+    return firstFitting(width, [
+        `selected: ${worker.workerId} · ${worker.profileName} · ${status} · ${attention} · action: ${action}`,
+        `selected: ${worker.workerId} · ${status} · action: ${action}`,
+        `${worker.workerId} · ${status} · ${action}`,
+        `${worker.workerId} · ${action}`,
+    ]);
+}
+function formatFollowHeader(following, top, visible, total) {
+    const start = total === 0 ? 0 : top + 1;
+    const end = Math.min(total, top + visible);
+    const status = following ? "[follow]" : "[paused f/G]";
+    return `${status}  scroll ${start}-${end} / ${total}`;
+}
+function colorForGroupBold(group) {
+    switch (group) {
+        case "needs_reply":
+            return warningBold;
+        case "needs_recovery":
+            return dangerBold;
+        case "in_progress":
+            return accentBold;
+        case "completed_or_idle":
+            return successBold;
+    }
+}
+function colorForWorker(worker) {
+    if (worker.pendingRelayQuestions.length > 0)
+        return warning;
+    switch (worker.status) {
+        case "running":
+        case "starting":
+            return accent;
+        case "waiting_followup":
+            return warning;
+        case "idle":
+            return worker.finalAnswer ? success : muted;
+        case "completed":
+            return success;
+        case "aborted":
+        case "error":
+        case "exited":
+            return danger;
+        default:
+            return muted;
+    }
+}
+export const TEAM_DASHBOARD_INITIAL_REFRESH_TIMEOUT_MS = 5_000;
+export function createTeamDashboardOverlayComponent(tui, teamManager, initialSnapshot, done, options = {}) {
+    const displayCost = (options.displayCost ?? teamManager.displayCost) !== false;
+    const visibleTabOrder = displayCost ? TAB_ORDER : TAB_ORDER.filter((tab) => tab !== "cost");
+    const prefillEditor = typeof options.prefillEditor === "function" ? options.prefillEditor : undefined;
+    setPalette(options.theme);
+    let snapshot = initialSnapshot;
+    const initialWorker = options.initialWorkerId && initialSnapshot.activeWorkers[options.initialWorkerId]
+        ? options.initialWorkerId
+        : undefined;
+    const state = {
+        tab: initialWorker ? "inspect" : "workers",
+        selectedWorkerId: initialWorker,
+        inspectScroll: 0,
+        inspectFollow: false,
+        consoleScroll: 0,
+        consoleFollow: true,
+        consoleMode: "activity",
+        costScroll: 0,
+    };
+    let statusMessage;
+    let statusExpires = 0;
+    let lastRenderMetrics = { listPageSize: 8, bodyPageSize: 10 };
+    const requestRender = () => {
+        tui.requestRender?.();
+    };
+    const setStatus = (message, durationMs = 2500) => {
+        statusMessage = message;
+        statusExpires = Date.now() + durationMs;
+        requestRender();
+    };
+    const activeStatus = () => {
+        if (!statusMessage)
+            return undefined;
+        if (Date.now() > statusExpires) {
+            statusMessage = undefined;
+            return undefined;
+        }
+        return statusMessage;
+    };
+    const offChunk = teamManager.onAssistantChunk?.((workerId) => {
+        if (state.selectedWorkerId !== workerId)
+            return;
+        if ((state.tab === "console" && state.consoleFollow) || (state.tab === "inspect" && state.inspectFollow)) {
+            requestRender();
+        }
+    });
+    const offActivity = teamManager.onActivityEvent?.((workerId) => {
+        if (state.selectedWorkerId !== workerId)
+            return;
+        if ((state.tab === "console" && state.consoleFollow) || (state.tab === "inspect" && state.inspectFollow)) {
+            requestRender();
+        }
+    });
+    let disposed = false;
+    const dispose = () => {
+        if (disposed)
+            return;
+        disposed = true;
+        offChunk?.();
+        offActivity?.();
+    };
+    const finish = () => {
+        dispose();
+        done();
+    };
+    const ensureSelectedWorker = () => {
+        const ids = getAttentionOrderedWorkerIds(snapshot);
+        if (ids.length === 0) {
+            state.selectedWorkerId = undefined;
+            return;
+        }
+        if (state.selectedWorkerId && snapshot.activeWorkers[state.selectedWorkerId])
+            return;
+        state.selectedWorkerId = ids[0];
+        state.inspectScroll = 0;
+        state.inspectFollow = false;
+        state.consoleScroll = 0;
+        state.consoleFollow = true;
+        state.consoleMode = "activity";
+    };
+    const refreshSnapshot = () => {
+        snapshot = teamManager.snapshot();
+        ensureSelectedWorker();
+    };
+    const currentWorker = () => {
+        if (!state.selectedWorkerId)
+            return undefined;
+        return snapshot.activeWorkers[state.selectedWorkerId];
+    };
+    const moveSelection = (delta) => {
+        const ids = getAttentionOrderedWorkerIds(snapshot);
+        if (ids.length === 0)
+            return;
+        const current = state.selectedWorkerId ? ids.indexOf(state.selectedWorkerId) : 0;
+        const safe = current >= 0 ? current : 0;
+        const next = clamp(safe + delta, 0, ids.length - 1);
+        state.selectedWorkerId = ids[next];
+        state.inspectScroll = 0;
+        state.inspectFollow = false;
+        state.consoleScroll = 0;
+        state.consoleFollow = true;
+    };
+    const refreshActive = () => {
+        teamManager.pingWorkers({ mode: "active" })
+            .then(() => {
+            refreshSnapshot();
+            setStatus(`Refreshed ${Object.keys(snapshot.activeWorkers).length} workers`);
+        })
+            .catch((error) => setStatus(`Refresh failed: ${error instanceof Error ? error.message : String(error)}`, 4000));
+    };
+    const copyCurrent = () => {
+        const worker = currentWorker();
+        if (!worker)
+            return setStatus("No worker selected — nothing to copy");
+        const payload = buildCopyPayload(worker, teamManager.getWorkerTranscript(worker.workerId), teamManager.getWorkerConsole(worker.workerId), teamManager.getWorkerActivity?.(worker.workerId));
+        copyToClipboard(payload)
+            .then(() => setStatus(`Copy complete — ${worker.workerId} (${payload.length.toLocaleString()} chars)`))
+            .catch((error) => setStatus(`Warning — copy failed: ${error instanceof Error ? error.message : String(error)}`, 4000));
+    };
+    const prefillAndClose = (text) => {
+        if (!prefillEditor) {
+            setStatus("Editor prefill unavailable in this context");
+            return;
+        }
+        prefillEditor(text);
+        finish();
+    };
+    const openModal = (kind, workerId) => {
+        if (prefillEditor) {
+            if (kind === "steer" || kind === "message") {
+                if (!workerId) {
+                    setStatus("Select a worker first");
+                    return false;
+                }
+                const worker = snapshot.activeWorkers[workerId];
+                if (!worker) {
+                    setStatus(`Worker ${workerId} not found`);
+                    return false;
+                }
+                const unreachable = new Set(["completed", "aborted", "error", "exited"]);
+                if (unreachable.has(worker.status)) {
+                    setStatus(`Worker ${workerId} is ${worker.status} — RPC disposed; delegate fresh`);
+                    return false;
+                }
+                prefillAndClose(`/team-steer ${workerId} `);
+                return true;
+            }
+            // new_task: no dedicated slash command; broadcast a steer to all.
+            if (!teamManager.delegateTask) {
+                setStatus("delegate_task not wired in this context");
+                return false;
+            }
+            if (teamManager.routingMode === "solo") {
+                setStatus("Team routing off. Run /team-enable on to delegate.");
+                return false;
+            }
+            prefillAndClose(`/team-steer all `);
+            return true;
+        }
+        if (kind === "steer" || kind === "message") {
+            if (!workerId) {
+                setStatus("Select a worker first");
+                return false;
+            }
+            const worker = snapshot.activeWorkers[workerId];
+            if (!worker)
+                return false;
+            // Block only truly unreachable workers. `messageWorker` resolver
+            // auto-upgrades steer/follow_up to a fresh prompt for idle and
+            // waiting_followup, matching /team-steer.
+            const unreachable = new Set(["completed", "aborted", "error", "exited"]);
+            if (unreachable.has(worker.status)) {
+                setStatus(`Worker ${workerId} is ${worker.status} — RPC disposed; delegate fresh`);
+                return false;
+            }
+            const steerLabel = kind === "steer" ? `Steer ${workerId}: ` : `Message ${workerId}: `;
+            const input = new LabeledInput(steerLabel);
+            input.focused = true;
+            input.onSubmit = () => { void submitModal(); };
+            input.onEscape = () => { state.modal = undefined; setStatus("(cancelled)"); };
+            state.modal = { kind, label: steerLabel, workerId, input };
+            return false;
+        }
+        // new_task
+        if (!teamManager.delegateTask) {
+            setStatus("delegate_task not wired in this context");
+            return false;
+        }
+        if (teamManager.routingMode === "solo") {
+            setStatus("Team routing off. Run /team-enable on to delegate.");
+            return false;
+        }
+        const profile = currentWorker()?.profileName ?? teamManager.config?.profiles[0]?.name;
+        if (!profile) {
+            setStatus("No profile available for new task");
+            return false;
+        }
+        const newTaskLabel = `New task (${profile}): `;
+        const newTaskInput = new LabeledInput(newTaskLabel);
+        newTaskInput.focused = true;
+        newTaskInput.onSubmit = () => { void submitModal(); };
+        newTaskInput.onEscape = () => { state.modal = undefined; setStatus("(cancelled)"); };
+        state.modal = { kind: "new_task", label: newTaskLabel, workerId: currentWorker()?.workerId, input: newTaskInput };
+        return false;
+    };
+    const submitModal = async () => {
+        const modal = state.modal;
+        if (!modal)
+            return;
+        const trimmed = modal.input.getValue().trim();
+        state.modal = undefined;
+        if (!trimmed) {
+            setStatus("(empty input — cancelled)");
+            return;
+        }
+        try {
+            if (modal.kind === "steer" && modal.workerId) {
+                const result = await teamManager.messageWorker?.(modal.workerId, trimmed, "steer");
+                setStatus(result ? formatAgentMessageResult(result) : `Steering running agent ${modal.workerId}.`);
+            }
+            else if (modal.kind === "message" && modal.workerId) {
+                const result = await teamManager.messageWorker?.(modal.workerId, trimmed, "auto");
+                setStatus(result ? formatAgentMessageResult(result) : `Messaged agent ${modal.workerId}.`);
+            }
+            else if (modal.kind === "new_task") {
+                if (teamManager.routingMode === "solo") {
+                    setStatus("Team routing off. Run /team-enable on to delegate.");
+                    return;
+                }
+                const profile = currentWorker()?.profileName ?? teamManager.config?.profiles[0]?.name;
+                if (!profile) {
+                    setStatus("No profile available");
+                    return;
+                }
+                // Always delegate fresh: forwarding reuseWorkerId silently from the
+                // selected worker would reset its <final_answer>/summary on submit,
+                // which is surprising when the operator just had it open to read.
+                await teamManager.delegateTask?.({
+                    title: trimmed.slice(0, 60),
+                    goal: trimmed,
+                    profileName: profile,
+                    cwd: options.cwd ?? process.cwd(),
+                });
+                setStatus(`Created ${profile} agent.`);
+                refreshSnapshot();
+            }
+        }
+        catch (error) {
+            setStatus(`Action failed: ${error instanceof Error ? error.message : String(error)}`, 4000);
+        }
+    };
+    const closeSelected = async () => {
+        const worker = currentWorker();
+        if (!worker)
+            return setStatus("No worker selected");
+        if (!REUSABLE_STATUSES.has(worker.status)) {
+            return setStatus(`Worker ${worker.workerId} is ${worker.status} — only idle/waiting can be closed; use [x]cancel for running`);
+        }
+        try {
+            await teamManager.closeWorker?.(worker.workerId);
+            setStatus(`Closed ${formatWorkerLabel(worker)}`);
+        }
+        catch (error) {
+            setStatus(`Close failed: ${error instanceof Error ? error.message : String(error)}`, 4000);
+        }
+    };
+    const cancelSelected = async () => {
+        const worker = currentWorker();
+        if (!worker)
+            return setStatus("No worker selected");
+        try {
+            await teamManager.cancelWorker?.(worker.workerId);
+            setStatus(`Cancelled ${formatWorkerLabel(worker)}`);
+        }
+        catch (error) {
+            setStatus(`Cancel failed: ${error instanceof Error ? error.message : String(error)}`, 4000);
+        }
+    };
+    const pruneTerminal = async () => {
+        try {
+            const removed = await teamManager.pruneTerminalWorkers?.() ?? [];
+            setStatus(`Pruned ${removed.length} terminal worker${removed.length === 1 ? "" : "s"}`);
+        }
+        catch (error) {
+            setStatus(`Prune failed: ${error instanceof Error ? error.message : String(error)}`, 4000);
+        }
+    };
+    const renderInspectBody = (width, rows) => {
+        const worker = currentWorker();
+        if (!worker) {
+            return enforceWidth(["No worker selected. Switch to Workers (1) to pick one."], width).slice(0, rows);
+        }
+        const body = wrapLines(buildInspectText(worker, teamManager.getWorkerTranscript(worker.workerId), teamManager.getWorkerConsole(worker.workerId), teamManager.getWorkerActivity?.(worker.workerId), currentPalette), width);
+        // Reserve 1 row for the [follow]/scroll header; the rest is the visible window.
+        const visible = Math.max(1, rows - 1);
+        const maxTop = Math.max(0, body.length - visible);
+        if (state.inspectFollow)
+            state.inspectScroll = maxTop;
+        const top = clamp(state.inspectScroll, 0, maxTop);
+        state.inspectScroll = top;
+        lastRenderMetrics.bodyPageSize = visible;
+        const header = formatFollowHeader(state.inspectFollow, top, visible, body.length);
+        return enforceWidth([header, ...body.slice(top, top + visible)], width);
+    };
+    const renderConsoleBody = (width, rows) => {
+        const worker = currentWorker();
+        if (!worker) {
+            return enforceWidth(["No worker selected. Switch to Workers (1) to pick one."], width).slice(0, rows);
+        }
+        const chunks = teamManager.getAssistantTail(worker.workerId);
+        const events = teamManager.getWorkerConsole(worker.workerId) ?? [];
+        const activity = teamManager.getWorkerActivity?.(worker.workerId);
+        const all = wrapLines(buildConsoleLines(worker, chunks, events, activity, state.consoleMode).join("\n"), width);
+        // Reserve 1 row for the [follow]/scroll header; the rest is the visible window.
+        const visible = Math.max(1, rows - 1);
+        const maxTop = Math.max(0, all.length - visible);
+        if (state.consoleFollow)
+            state.consoleScroll = maxTop;
+        const top = clamp(state.consoleScroll, 0, maxTop);
+        state.consoleScroll = top;
+        lastRenderMetrics.bodyPageSize = visible;
+        const header = formatFollowHeader(state.consoleFollow, top, visible, all.length);
+        return enforceWidth([header, ...all.slice(top, top + visible)], width);
+    };
+    const renderCostBody = (width, rows) => {
+        const all = wrapLines(buildCostLines(snapshot).join("\n"), width);
+        const maxTop = Math.max(0, all.length - rows);
+        const top = Math.min(state.costScroll, maxTop);
+        state.costScroll = top;
+        lastRenderMetrics.bodyPageSize = rows;
+        return enforceWidth(all.slice(top, top + rows), width);
+    };
+    const renderBody = (width, rows) => {
+        if (rows <= 0)
+            return [];
+        switch (state.tab) {
+            case "workers":
+                return renderWorkersBody(width, rows);
+            case "inspect":
+                return renderInspectBody(width, rows);
+            case "console":
+                return renderConsoleBody(width, rows);
+            case "cost":
+                return renderCostBody(width, rows);
+        }
+    };
+    function renderWorkersBody(width, rows) {
+        const roster = new RosterSelectList(snapshot, state.selectedWorkerId);
+        const lines = roster.render(width, rows);
+        lastRenderMetrics.listPageSize = Math.max(1, Math.min(rows - 1, ROSTER_PAGE_SIZE));
+        return enforceWidth(lines, width).slice(0, rows);
+    }
+    ensureSelectedWorker();
+    const handleModalInput = (data) => {
+        if (!state.modal)
+            return false;
+        state.modal.input.handleInput(data);
+        return true;
+    };
+    const handleNumberKey = (data) => {
+        const numIdx = ["1", "2", "3", "4"].indexOf(data);
+        if (numIdx < 0)
+            return false;
+        const tab = TAB_ORDER[numIdx];
+        if (!tab || !visibleTabOrder.includes(tab))
+            return false;
+        state.tab = tab;
+        return true;
+    };
+    const isPageUpKey = (data) => data === "b" || matchesKey(data, "pageUp") || matchesKey(data, "ctrl+u");
+    const isPageDownKey = (data) => data === " " || matchesKey(data, "pageDown") || matchesKey(data, "ctrl+d");
+    const isTopKey = (data) => data === "g" || matchesKey(data, "home") || matchesKey(data, "alt+up");
+    const isBottomKey = (data) => data === "G" || matchesKey(data, "end") || matchesKey(data, "alt+down");
+    const isFollowToggleKey = (data) => data === "f" || matchesKey(data, "alt+f");
+    return {
+        render(width) {
+            refreshSnapshot();
+            const cap = Math.min(width, Math.max(1, tui.terminal.columns));
+            const innerWidth = Math.max(1, cap - 4); // outer frame: │ + space + content + space + │
+            const totalRows = computeOverlayRows(tui.terminal.rows);
+            const routingMode = teamManager.routingMode ?? "team";
+            const status = activeStatus();
+            const titleRaw = "Pi Agents Team · /team";
+            const titleStyled = accentBold(titleRaw);
+            const tabBar = buildTabBar(state.tab, routingMode, displayCost);
+            const fullTabHint = displayCost ? "1-4 tabs" : "1-3 tabs";
+            const compactTabHint = displayCost ? "1-4" : "1-3";
+            const helpRow = state.tab === "workers"
+                ? firstFitting(innerWidth, [
+                    `↑/↓ select · space/b page · g/G ends · ${fullTabHint}`,
+                    `↑↓ select · space/b page · g/G · ${compactTabHint}`,
+                    `↑↓ select · space/b · g/G · ${compactTabHint}`,
+                ])
+                : state.tab === "inspect"
+                    ? firstFitting(innerWidth, [
+                        `↑/↓ scroll · f follow · space/b page · g/G top/bottom · ${fullTabHint}`,
+                        `↑↓ scroll · f follow · space/b · g/G · ${compactTabHint}`,
+                        `↑↓ · f · space/b · g/G · ${compactTabHint}`,
+                    ])
+                    : state.tab === "console"
+                        ? firstFitting(innerWidth, [
+                            `↑/↓ scroll · f follow · r raw/activity · space/b page · g/G top/bottom · ${fullTabHint}`,
+                            `↑↓ scroll · f follow · r raw · space/b · g/G · ${compactTabHint}`,
+                            `↑↓ · f · r · space/b · g/G · ${compactTabHint}`,
+                        ])
+                        : firstFitting(innerWidth, [
+                            `↑/↓ scroll · space/b page · g/G top/bottom · ${fullTabHint}`,
+                            `↑↓ scroll · space/b · g/G · ${compactTabHint}`,
+                            `↑↓ · space/b · g/G · ${compactTabHint}`,
+                        ]);
+            const worker = currentWorker();
+            const workerCount = Object.keys(snapshot.activeWorkers).length;
+            const attentionSummary = buildActionSummaryLine(snapshot);
+            const summaryRow = firstFitting(innerWidth, [
+                buildCompactTeamSummaryLine(snapshot),
+                `workers ${workerCount} · ${attentionSummary}`,
+                `workers ${workerCount} · ${attentionSummary.replace(/Needs /g, "").replace("Completed or idle", "Done/idle")}`,
+                `${workerCount} workers · ${snapshot.relayQueue.length} relays`,
+            ]);
+            const selectedHeader = buildSelectedWorkerHeader(worker, innerWidth);
+            const snippet = sanitizeTerminalText(worker ? buildWorkerPrioritySnippet(worker) : "no worker selected");
+            const selectedSnippet = firstFitting(innerWidth, [
+                `focus: ${snippet}`,
+                snippet,
+            ]);
+            const headerLines = [
+                tabBar,
+                accent(summaryRow),
+                dim(helpRow),
+                bold(selectedHeader),
+                dim(selectedSnippet),
+            ];
+            const footerLines = [];
+            if (state.modal) {
+                const inputLines = state.modal.input.render(innerWidth);
+                const hint = dim("  (enter submit · esc cancel)");
+                if (inputLines.length > 0) {
+                    const lastIndex = inputLines.length - 1;
+                    inputLines[lastIndex] = accent(inputLines[lastIndex]) + hint;
+                }
+                footerLines.push(...inputLines);
+            }
+            footerLines.push(buildActionBar(state.tab === "console" ? { r: state.consoleMode === "activity" ? "aw" : "ctivity" } : undefined));
+            if (status)
+                footerLines.push(accent(`» ${status}`));
+            // Reserve rows: top frame (1) + header lines + blank + body + blank + footer + bottom frame (1).
+            const overhead = 1 + headerLines.length + 1 + 1 + footerLines.length + 1;
+            const bodyRows = Math.max(0, totalRows - overhead);
+            const body = renderBody(innerWidth, bodyRows);
+            while (body.length < bodyRows)
+                body.push("");
+            const innerLines = enforceWidth([...headerLines, "", ...body, "", ...footerLines], innerWidth);
+            const framedRows = innerLines.map((line) => frameRow(line, cap));
+            const top = frameTopWithTitle(titleStyled, cap);
+            const bottom = frameBottom(cap);
+            const totalFrameRows = framedRows.length + 2;
+            const tinyHint = totalFrameRows > totalRows ? frameRow(dim("(terminal too small)"), cap) : undefined;
+            return clampFramedRows([top, ...framedRows, bottom], totalRows, tinyHint);
+        },
+        invalidate() {
+            setPalette(options.theme);
+            requestRender();
+        },
+        dispose() {
+            dispose();
+        },
+        handleInput(data) {
+            if (handleModalInput(data)) {
+                requestRender();
+                return;
+            }
+            if (data === "q")
+                return finish();
+            if (matchesKey(data, "escape"))
+                return finish();
+            if (handleNumberKey(data)) {
+                requestRender();
+                return;
+            }
+            if (matchesKey(data, "tab")) {
+                const idx = visibleTabOrder.indexOf(state.tab);
+                state.tab = visibleTabOrder[(idx + 1) % visibleTabOrder.length];
+                requestRender();
+                return;
+            }
+            if (matchesKey(data, "shift+tab")) {
+                const idx = visibleTabOrder.indexOf(state.tab);
+                state.tab = visibleTabOrder[(idx - 1 + visibleTabOrder.length) % visibleTabOrder.length];
+                requestRender();
+                return;
+            }
+            // Legacy `o` / `d` aliases land you on Inspect (the merged Overview/Deliverable view).
+            // `c` is no longer the Console alias — it's the action-bar close hotkey.
+            if (data === "o" || data === "d") {
+                state.tab = "inspect";
+                requestRender();
+                return;
+            }
+            // Action bar hotkeys. On terminals that support editor prefill,
+            // these close the overlay and seed the input editor with the matching
+            // slash command instead of opening a modal inline form.
+            if (data === "s") {
+                if (!openModal("steer", state.selectedWorkerId))
+                    requestRender();
+                return;
+            }
+            if (data === "m") {
+                if (!openModal("message", state.selectedWorkerId))
+                    requestRender();
+                return;
+            }
+            if (data === "n") {
+                if (!openModal("new_task"))
+                    requestRender();
+                return;
+            }
+            if (data === "c") {
+                if (prefillEditor && state.selectedWorkerId) {
+                    prefillAndClose(`/team-stop ${state.selectedWorkerId} `);
+                }
+                else {
+                    void closeSelected();
+                    requestRender();
+                }
+                return;
+            }
+            if (data === "x") {
+                if (prefillEditor && state.selectedWorkerId) {
+                    prefillAndClose(`/team-stop ${state.selectedWorkerId} `);
+                }
+                else {
+                    void cancelSelected();
+                    requestRender();
+                }
+                return;
+            }
+            if (data === "p") {
+                void pruneTerminal();
+                if (prefillEditor)
+                    finish();
+                else
+                    requestRender();
+                return;
+            }
+            if (data === "r") {
+                if (state.tab === "console") {
+                    state.consoleMode = state.consoleMode === "activity" ? "raw" : "activity";
+                    state.consoleScroll = 0;
+                    state.consoleFollow = false;
+                    setStatus(`Console ${state.consoleMode} view`);
+                }
+                else {
+                    refreshActive();
+                }
+                requestRender();
+                return;
+            }
+            if (data === "y") {
+                copyCurrent();
+                requestRender();
+                return;
+            }
+            // List/scroll navigation per tab.
+            if (state.tab === "workers") {
+                if (data === "j" || matchesKey(data, "down")) {
+                    moveSelection(1);
+                    requestRender();
+                    return;
+                }
+                if (data === "k" || matchesKey(data, "up")) {
+                    moveSelection(-1);
+                    requestRender();
+                    return;
+                }
+                if (isPageDownKey(data)) {
+                    moveSelection(lastRenderMetrics.listPageSize);
+                    requestRender();
+                    return;
+                }
+                if (isPageUpKey(data)) {
+                    moveSelection(-lastRenderMetrics.listPageSize);
+                    requestRender();
+                    return;
+                }
+                if (matchesKey(data, "enter")) {
+                    if (state.selectedWorkerId)
+                        state.tab = "inspect";
+                    requestRender();
+                    return;
+                }
+                if (isTopKey(data)) {
+                    const ids = getAttentionOrderedWorkerIds(snapshot);
+                    if (ids.length > 0)
+                        state.selectedWorkerId = ids[0];
+                    requestRender();
+                    return;
+                }
+                if (isBottomKey(data)) {
+                    const ids = getAttentionOrderedWorkerIds(snapshot);
+                    if (ids.length > 0)
+                        state.selectedWorkerId = ids[ids.length - 1];
+                    requestRender();
+                    return;
+                }
+                return;
+            }
+            if (state.tab === "inspect") {
+                if (isFollowToggleKey(data)) {
+                    state.inspectFollow = !state.inspectFollow;
+                    requestRender();
+                    return;
+                }
+                if (data === "j" || matchesKey(data, "down")) {
+                    state.inspectScroll += 1;
+                    state.inspectFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (data === "k" || matchesKey(data, "up")) {
+                    state.inspectScroll = Math.max(0, state.inspectScroll - 1);
+                    state.inspectFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isPageDownKey(data)) {
+                    state.inspectScroll += lastRenderMetrics.bodyPageSize;
+                    state.inspectFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isPageUpKey(data)) {
+                    state.inspectScroll = Math.max(0, state.inspectScroll - lastRenderMetrics.bodyPageSize);
+                    state.inspectFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isTopKey(data)) {
+                    state.inspectScroll = 0;
+                    state.inspectFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isBottomKey(data)) {
+                    state.inspectFollow = true;
+                    requestRender();
+                    return;
+                }
+                return;
+            }
+            if (state.tab === "console") {
+                if (isFollowToggleKey(data)) {
+                    state.consoleFollow = !state.consoleFollow;
+                    requestRender();
+                    return;
+                }
+                if (data === "j" || matchesKey(data, "down")) {
+                    state.consoleScroll += 1;
+                    state.consoleFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (data === "k" || matchesKey(data, "up")) {
+                    state.consoleScroll = Math.max(0, state.consoleScroll - 1);
+                    state.consoleFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isPageUpKey(data)) {
+                    state.consoleScroll = Math.max(0, state.consoleScroll - lastRenderMetrics.bodyPageSize);
+                    state.consoleFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isPageDownKey(data)) {
+                    state.consoleScroll += lastRenderMetrics.bodyPageSize;
+                    state.consoleFollow = false;
+                    requestRender();
+                    return;
+                }
+                if (isBottomKey(data)) {
+                    state.consoleFollow = true;
+                    requestRender();
+                    return;
+                }
+                if (isTopKey(data)) {
+                    state.consoleScroll = 0;
+                    state.consoleFollow = false;
+                    requestRender();
+                    return;
+                }
+                return;
+            }
+            if (state.tab === "cost") {
+                if (data === "j" || matchesKey(data, "down")) {
+                    state.costScroll += 1;
+                    requestRender();
+                    return;
+                }
+                if (data === "k" || matchesKey(data, "up")) {
+                    state.costScroll = Math.max(0, state.costScroll - 1);
+                    requestRender();
+                    return;
+                }
+                if (isPageDownKey(data)) {
+                    state.costScroll += lastRenderMetrics.bodyPageSize;
+                    requestRender();
+                    return;
+                }
+                if (isPageUpKey(data)) {
+                    state.costScroll = Math.max(0, state.costScroll - lastRenderMetrics.bodyPageSize);
+                    requestRender();
+                    return;
+                }
+                if (isTopKey(data)) {
+                    state.costScroll = 0;
+                    requestRender();
+                    return;
+                }
+                if (isBottomKey(data)) {
+                    state.costScroll = Number.MAX_SAFE_INTEGER;
+                    requestRender();
+                    return;
+                }
+            }
+        },
+    };
+}
+const NARROW_OVERLAY_THRESHOLD = 80;
+export async function openTeamDashboardOverlay(ctx, teamManager, options = {}) {
+    const initialState = teamManager.snapshot();
+    const focusWorkerId = options.initialWorkerId && initialState.activeWorkers[options.initialWorkerId]
+        ? options.initialWorkerId
+        : undefined;
+    const emitText = typeof options.emitText === "function"
+        ? options.emitText
+        : (text) => console.log(text);
+    const prefillEditor = typeof ctx.ui?.setEditorText === "function"
+        ? (text) => ctx.ui.setEditorText(text)
+        : undefined;
+    if (ctx.mode !== "tui") {
+        await teamManager.pingWorkers({ mode: "active" }).catch(() => { });
+        emitText(buildTeamDashboardText(teamManager.snapshot()));
+        return;
+    }
+    class DashboardLoader {
+        child;
+        disposed = false;
+        disposeHandlers = [];
+        constructor(child) {
+            this.child = child;
+        }
+        onDispose(handler) {
+            if (this.disposed) {
+                handler();
+                return;
+            }
+            this.disposeHandlers.push(handler);
+        }
+        isDisposed() {
+            return this.disposed;
+        }
+        replace(child) {
+            if (this.disposed) {
+                child.dispose?.();
+                return;
+            }
+            this.child.dispose?.();
+            this.child = child;
+        }
+        render(width) {
+            return this.child.render(width);
+        }
+        invalidate() {
+            this.child.invalidate?.();
+        }
+        handleInput(data) {
+            this.child.handleInput?.(data);
+        }
+        dispose() {
+            if (this.disposed)
+                return;
+            this.disposed = true;
+            for (const handler of this.disposeHandlers.splice(0))
+                handler();
+            this.child.dispose?.();
+        }
+    }
+    await ctx.ui.custom((tui, theme, _keybindings, done) => {
+        const resolvedTheme = resolveTheme(theme);
+        const termColumns = tui.terminal.columns;
+        if (termColumns < NARROW_OVERLAY_THRESHOLD) {
+            return (async () => {
+                await teamManager.pingWorkers({ mode: "active" }).catch(() => { });
+                const snapshot = teamManager.snapshot();
+                const targetId = options.initialWorkerId && snapshot.activeWorkers[options.initialWorkerId]
+                    ? options.initialWorkerId
+                    : focusWorkerId;
+                if (targetId && snapshot.activeWorkers[targetId]) {
+                    emitText(buildNarrowInspectText(snapshot.activeWorkers[targetId], termColumns));
+                }
+                else {
+                    emitText(buildNarrowTeamDashboardText(snapshot, termColumns));
+                }
+                done();
+                return new BorderedLoader(tui, resolvedTheme, "", { cancellable: false });
+            })();
+        }
+        const loader = new BorderedLoader(tui, resolvedTheme, "Loading team dashboard…", { cancellable: false });
+        const wrapper = new DashboardLoader(loader);
+        const timeoutMs = Math.max(0, options.initialRefreshTimeoutMs ?? TEAM_DASHBOARD_INITIAL_REFRESH_TIMEOUT_MS);
+        let dashboardShown = false;
+        const showDashboard = () => {
+            if (dashboardShown || wrapper.isDisposed())
+                return;
+            dashboardShown = true;
+            const state = teamManager.snapshot();
+            const resolvedFocusWorkerId = options.initialWorkerId && state.activeWorkers[options.initialWorkerId]
+                ? options.initialWorkerId
+                : focusWorkerId;
+            wrapper.replace(createTeamDashboardOverlayComponent(tui, teamManager, state, done, { initialWorkerId: resolvedFocusWorkerId, cwd: options.cwd ?? ctx.cwd, displayCost: options.displayCost, theme: resolvedTheme, prefillEditor }));
+            tui.requestRender();
+        };
+        const timer = setTimeout(showDashboard, timeoutMs);
+        wrapper.onDispose(() => clearTimeout(timer));
+        teamManager.pingWorkers({ mode: "active" })
+            .catch(() => { })
+            .then(() => {
+            clearTimeout(timer);
+            showDashboard();
+        });
+        return wrapper;
+    }, {
+        overlay: true,
+        overlayOptions: TEAM_DASHBOARD_OVERLAY_OPTIONS,
+    });
+}
+export { buildTeamDashboardText, sanitizeText };

@@ -4,47 +4,105 @@
   "enabled": true,
   "routingMode": "team",
   "workerAccess": {
-    "allowPathsOutsideProject": false
+    "allowPathsOutsideProject": true
   },
   "display": {
     "cost": true
   },
   "roles": {
     "dispatcher": {
-      "whenToUse": "Use for Stage 2 (Routing and assignment) of the seven-stage lifecycle — classify the goal, set priority, record ownership and confidence. The paper names this role first; no goal skips the dispatch.",
+      "whenToUse": "Route and assign work. I classify the goal, set priority, record ownership and confidence, and name the next role. No goal skips dispatch.",
       "model": "default",
       "thinkingLevel": "high",
-      "prompt": ".pi-team/prompts/agents/dispatcher.md"
-    },
-    "researcher": {
-      "whenToUse": "Use for Stage 3 (Context gathering) when uncertainty is high — reduce uncertainty before a decision lands, surface alternatives with trade-offs, land findings in the durable record. The paper: the Researcher leads when uncertainty is high.",
-      "model": "default",
-      "thinkingLevel": "high",
-      "prompt": ".pi-team/prompts/agents/researcher.md"
+      "access": {
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash"
+        ],
+        "write": false
+      },
+      "prompt": "default"
     },
     "builder": {
-      "whenToUse": "Use for Stage 4 (Action) when the goal is to produce a durable artefact — code, document, schema, configuration, dataset. Self-validate before handing off to the Verifier.",
+      "whenToUse": "Produce durable artefacts. I write code, documents, schemas, and configurations, then self-validate before handing off to the Verifier.",
       "model": "default",
       "thinkingLevel": "medium",
-      "prompt": ".pi-team/prompts/agents/builder.md"
+      "access": {
+        "tools": [
+          "read",
+          "bash",
+          "edit",
+          "write"
+        ],
+        "write": true
+      },
+      "prompt": "default"
     },
     "runtime": {
-      "whenToUse": "Use for Stage 4 (Action) when the goal is to operate a live system — deploy, migrate, scale, restart, configure. Must hold a tested rollback plan and stay inside the safe tier.",
+      "whenToUse": "Operate live systems. I deploy, migrate, scale, restart, and configure, and I keep a tested rollback plan inside the safe tier.",
       "model": "default",
       "thinkingLevel": "high",
-      "prompt": ".pi-team/prompts/agents/runtime.md"
+      "access": {
+        "tools": [
+          "read",
+          "bash",
+          "edit",
+          "write"
+        ],
+        "write": true
+      },
+      "prompt": "default"
     },
     "verifier": {
-      "whenToUse": "Use for Stage 5 (Verification) — independent validation gate before integration or deployment. Define the green gate, re-run evidence where possible, post a verdict. The paper: a verifier who always passes is not a verifier.",
+      "whenToUse": "Independent validation gate. I define the green gate, re-run evidence where possible, and post a verdict before integration or deployment.",
       "model": "default",
       "thinkingLevel": "high",
-      "prompt": ".pi-team/prompts/agents/verifier.md"
+      "access": {
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash"
+        ],
+        "write": false
+      },
+      "prompt": "default"
     },
-    "archivist": {
-      "whenToUse": "Use for Stage 6 (Recording and archival) and the ownership-transfer half of Stage 7 (Hand-off or closure) — append-only durable record, index for retrieval, surface recurring lessons as skills.",
+    "researcher": {
+      "whenToUse": "Reduce uncertainty. I gather context, surface alternatives with trade-offs, and land findings the team can act on.",
       "model": "default",
       "thinkingLevel": "medium",
-      "prompt": ".pi-team/prompts/agents/archivist.md"
+      "access": {
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash"
+        ],
+        "write": false
+      },
+      "prompt": "default"
+    },
+    "archivist": {
+      "whenToUse": "Maintain the durable record. I append, index, and surface recurring lessons so the team can retrieve context and turn it into skills.",
+      "model": "default",
+      "thinkingLevel": "medium",
+      "access": {
+        "tools": [
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "bash"
+        ],
+        "write": false
+      },
+      "prompt": "default"
     }
   }
 }

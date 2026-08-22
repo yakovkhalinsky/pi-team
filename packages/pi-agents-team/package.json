@@ -1,0 +1,72 @@
+{
+  "name": "pi-agents-team",
+  "version": "2026.8.5",
+  "description": "Pi extension that turns one coding session into a multi-agent team with background RPC worker agents.",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Kristjan Pikhof",
+    "url": "https://github.com/KristjanPikhof"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "extension",
+    "ai-agents",
+    "multi-agent",
+    "agent-team",
+    "coding-agent",
+    "orchestrator",
+    "background-agents",
+    "rpc",
+    "developer-tools"
+  ],
+  "homepage": "https://github.com/KristjanPikhof/pi-agents-team",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KristjanPikhof/pi-agents-team.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KristjanPikhof/pi-agents-team/issues"
+  },
+  "main": "./dist/extensions/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/extensions/index.d.ts",
+      "default": "./dist/extensions/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test": "echo 'no tests configured for this port'",
+    "check": "npm run build && npm run typecheck"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/extensions/index.js"
+    ],
+    "prompts": []
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.6",
+    "@earendil-works/pi-tui": ">=0.80.6",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
