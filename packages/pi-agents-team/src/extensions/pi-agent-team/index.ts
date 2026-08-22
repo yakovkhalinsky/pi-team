@@ -3,7 +3,7 @@
  *
  * Replaces the heavy /team overlay with a minimal extension that:
  * - discovers role profiles from .pi/agents/*.md (and ~/.pi/agent/agents/*.md)
- * - registers stub delegate_task / wait_for_agents tools
+ * - implements real delegate_task / wait_for_agents tools via worker Pi processes
  * - registers a /agents slash command that lists discovered agents
  * - injects a short, deterministic agent list into the orchestrator system prompt
  * - records a lightweight state entry on session start
@@ -14,6 +14,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../../runtime/final-answer.js";
+import { cleanupTempPrompt, spawnWorker, writeTempPrompt } from "../../runtime/worker-spawn.js";
 
 const STATE_CUSTOM_TYPE = "pi-agents-team/state";
 const AGENTS_MESSAGE_TYPE = "pi-agents-team/agents-list";
@@ -149,6 +151,11 @@ const DelegateTaskSchema = Type.Object(
     goal: Type.String({ description: "What the agent should accomplish" }),
     profileName: Type.String({ description: "Agent role profile name" }),
     cwd: Type.Optional(Type.String({ description: "Working directory for the agent" })),
+    contextHints: Type.Optional(Type.String({ description: "Additional context for the worker" })),
+    expectedOutput: Type.Optional(Type.String({ description: "Expected output format or contents" })),
+    pathScopeRoots: Type.Optional(Type.Array(Type.String(), { description: "Path scope roots for the worker" })),
+    skills: Type.Optional(Type.Array(Type.String(), { description: "Skill names to enable in the worker" })),
+    timeoutMs: Type.Optional(Type.Number({ description: "Maximum time to wait for the worker in milliseconds" })),
   },
   { additionalProperties: false },
 );
@@ -161,14 +168,62 @@ const WaitForAgentsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const workers = new Map();
+
+function generateWorkerId() {
+  return `worker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createWorkerRecord(workerId, profileName, title) {
+  const record = {
+    workerId,
+    profileName,
+    title,
+    status: "running",
+    startedAt: Date.now(),
+  };
+  workers.set(workerId, record);
+  return record;
+}
+
+function settleWorker(workerId, update) {
+  const record = workers.get(workerId);
+  if (!record) return;
+  Object.assign(record, update, { settledAt: Date.now() });
+}
+
+function buildWorkerTaskText(params) {
+  const parts = [params.goal];
+  if (params.contextHints) parts.push(`\n\nContext hints:\n${params.contextHints}`);
+  if (params.expectedOutput) parts.push(`\n\nExpected output:\n${params.expectedOutput}`);
+  if (params.pathScopeRoots?.length) {
+    parts.push(`\n\nPath scope roots:\n${params.pathScopeRoots.join("\n")}`);
+  }
+  if (params.skills?.length) {
+    parts.push(`\n\nSkills:\n${params.skills.join(", ")}`);
+  }
+  return parts.join("");
+}
+
+function makeDelegateResult(workerId, status, result, error) {
+  const payload = { workerId, status, result: result ?? {} };
+  if (error) payload.error = error;
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  };
+}
+
 export const _testing = {
   discoverAgents,
   hasProjectAgents,
   formatAgentList,
   buildAgentPromptBlock,
+  getWorkerMap: () => workers,
+  clearWorkers: () => workers.clear(),
+  buildWorkerTaskText,
 };
 
-export default function (pi) {
+export default function (pi, options = {}) {
   function recordState() {
     try {
       pi.appendEntry(STATE_CUSTOM_TYPE, {
@@ -206,34 +261,131 @@ export default function (pi) {
   pi.registerTool({
     name: "delegate_task",
     label: "Delegate task",
-    description: "Stub: records a delegation request for a team agent. Full worker delegation is not implemented in the Path A shell.",
+    description: "Spawn a worker Pi process for a team agent and return its final answer.",
     parameters: DelegateTaskSchema,
-    async execute(_toolCallId, params) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `delegate_task stub: would dispatch "${params.profileName}" for "${params.title}". Goal: ${params.goal}`,
-          },
-        ],
-      };
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const workerId = generateWorkerId();
+      const cwd = params.cwd ?? ctx?.cwd ?? process.cwd();
+      const agents = discoverAgents(cwd);
+      const agent = agents.find((a) => a.name === params.profileName);
+
+      if (!agent) {
+        const available = agents.map((a) => a.name).join(", ") || "none";
+        const error = `Unknown agent profile: "${params.profileName}". Available: ${available}.`;
+        createWorkerRecord(workerId, params.profileName, params.title);
+        settleWorker(workerId, { status: "failed", error });
+        return makeDelegateResult(workerId, "failed", {}, error);
+      }
+
+      createWorkerRecord(workerId, params.profileName, params.title);
+
+      let tmpFilePath = null;
+      let tmpDir = null;
+
+      try {
+        if (agent.systemPrompt?.trim()) {
+          const tmp = await writeTempPrompt(agent.name, agent.systemPrompt);
+          tmpFilePath = tmp.filePath;
+          tmpDir = tmp.dir;
+        }
+
+        const task = buildWorkerTaskText(params);
+        const result = await spawnWorker({
+          command: options.command ?? "pi",
+          cwd,
+          systemPromptPath: tmpFilePath ?? undefined,
+          tools: agent.tools,
+          model: agent.model,
+          thinkingLevel: agent.thinkingLevel,
+          allowSkills: Boolean(params.skills?.length),
+          extraArgs: [task],
+          timeoutMs: params.timeoutMs ?? 300_000,
+          spawnImpl: options.spawnImpl,
+        });
+
+        const finalAnswerText = extractFinalAnswer(result.stdout);
+        const summary = finalAnswerText ? parseFinalAnswerSummaryFields(finalAnswerText) : {};
+
+        if (result.error || result.exitCode !== 0) {
+          const error = result.error || `Worker exited with code ${result.exitCode}`;
+          settleWorker(workerId, {
+            status: "failed",
+            error,
+            stderr: result.stderr,
+            stdout: result.stdout,
+          });
+          return makeDelegateResult(workerId, "failed", { ...summary, finalAnswerText }, error);
+        }
+
+        if (!finalAnswerText) {
+          const error = "No <final_answer> block found in worker output";
+          settleWorker(workerId, {
+            status: "failed",
+            error,
+            stderr: result.stderr,
+            stdout: result.stdout,
+          });
+          return makeDelegateResult(workerId, "failed", { ...summary, finalAnswerText }, error);
+        }
+
+        const workerResult = { ...summary, finalAnswerText };
+        settleWorker(workerId, {
+          status: "completed",
+          result: workerResult,
+          stderr: result.stderr,
+          stdout: result.stdout,
+        });
+        return makeDelegateResult(workerId, "completed", workerResult);
+      } catch (err) {
+        const error = err?.message ?? String(err);
+        settleWorker(workerId, { status: "failed", error });
+        return makeDelegateResult(workerId, "failed", {}, error);
+      } finally {
+        await cleanupTempPrompt(tmpFilePath, tmpDir);
+      }
     },
   });
 
   pi.registerTool({
     name: "wait_for_agents",
     label: "Wait for agents",
-    description: "Stub: returns immediately. Real agent synchronization is not implemented in the Path A shell.",
+    description: "Wait for delegated workers to finish and return their statuses.",
     parameters: WaitForAgentsSchema,
     async execute(_toolCallId, params) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `wait_for_agents stub: requested workers=${params.workerIds?.join(",") ?? "all"}; timeout=${params.timeoutMs ?? "default"}.`,
-          },
-        ],
-      };
+      const ids = params.workerIds ?? Array.from(workers.keys());
+      const timeoutMs = params.timeoutMs ?? 30_000;
+      const pollInterval = 250;
+      const start = Date.now();
+
+      while (true) {
+        const results = ids.map((id) => {
+          const w = workers.get(id);
+          if (!w) return { workerId: id, status: "unknown", result: {}, error: "Worker not found" };
+          return {
+            workerId: w.workerId,
+            status: w.status,
+            result: w.result ?? {},
+            error: w.error,
+          };
+        });
+
+        const allSettled = results.every(
+          (r) => r.status === "completed" || r.status === "failed" || r.status === "unknown",
+        );
+        if (allSettled) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ workers: results }) }],
+          };
+        }
+
+        if (Date.now() - start >= timeoutMs) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ workers: results, timedOut: true }) }],
+          };
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      }
     },
   });
 

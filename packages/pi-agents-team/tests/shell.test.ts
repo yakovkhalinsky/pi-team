@@ -1,5 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import extensionFactory, { _testing } from "../src/extensions/pi-agent-team/index.js";
 
 function createMockPi() {
@@ -42,7 +43,25 @@ function createMockContext(overrides: Record<string, any> = {}) {
   };
 }
 
+function createMockChild(stdout: string, stderr: string, exitCode: number) {
+  const child = new EventEmitter() as any;
+  child.pid = 12345;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = () => true;
+  setImmediate(() => {
+    child.stdout.emit("data", stdout);
+    child.stderr.emit("data", stderr);
+    child.emit("close", exitCode, null);
+  });
+  return child;
+}
+
 describe("Path A thin extension shell", () => {
+  beforeEach(() => {
+    _testing.clearWorkers();
+  });
+
   it("registers delegate_task and wait_for_agents tools plus /agents command", () => {
     const pi = createMockPi();
     extensionFactory(pi);
@@ -119,31 +138,152 @@ describe("Path A thin extension shell", () => {
     assert.ok(text.includes("verifier:"));
   });
 
-  it("delegate_task tool returns a stub response", async () => {
+  it("delegate_task spawns a worker with the right command and arguments", async () => {
+    const pi = createMockPi();
+    const spawnCalls: Array<{ command: string; args: string[]; options: any }> = [];
+    const mockSpawn = (command: string, args: string[], options: any) => {
+      spawnCalls.push({ command, args, options });
+      return createMockChild(
+        "Some prelude\n<final_answer>\nheadline: did the thing\n\nresult body\n</final_answer>\n",
+        "warn line\n",
+        0,
+      );
+    };
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const result = await tool.execute(
+      "call-1",
+      {
+        title: "Add smoke test",
+        goal: "add a smoke test for the shell",
+        profileName: "builder",
+        contextHints: "use node:test",
+        expectedOutput: "passing test file",
+        pathScopeRoots: ["packages/pi-agents-team/tests"],
+        skills: ["testing"],
+      },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0].command, "pi");
+    const args = spawnCalls[0].args;
+    assert.ok(args.includes("--mode"), "should set output mode");
+    assert.ok(args.includes("json"), "should use json mode");
+    assert.ok(args.includes("-p"), "should use non-interactive print mode");
+    assert.ok(args.includes("--no-session"), "should not persist session");
+    assert.ok(args.includes("--append-system-prompt"), "should append agent system prompt");
+    assert.ok(args.includes("--no-extensions"), "should start a minimal worker");
+    assert.ok(!args.includes("--no-skills"), "should allow skills when requested");
+
+    const taskArg = args[args.length - 1];
+    assert.ok(taskArg.includes("add a smoke test for the shell"));
+    assert.ok(taskArg.includes("use node:test"));
+    assert.ok(taskArg.includes("packages/pi-agents-team/tests"));
+    assert.ok(taskArg.includes("testing"));
+
+    const payload = JSON.parse(result.content[0].text);
+    assert.ok(payload.workerId.startsWith("worker-"));
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.result.headline, "did the thing");
+    assert.ok(payload.result.finalAnswerText.includes("result body"));
+
+    const record = _testing.getWorkerMap().get(payload.workerId);
+    assert.ok(record, "worker should be tracked in memory");
+    assert.equal(record.status, "completed");
+    assert.equal(record.result.headline, "did the thing");
+  });
+
+  it("delegate_task returns a clear error for an unknown profile", async () => {
     const pi = createMockPi();
     extensionFactory(pi);
 
     const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
-    const result = await tool.execute("call-1", {
-      title: "Add smoke test",
-      goal: "add a smoke test for the shell",
-      profileName: "builder",
+    const result = await tool.execute("call-2", {
+      title: "Mystery task",
+      goal: "do something",
+      profileName: "nonexistent",
     });
 
-    const text = result.content[0].text;
-    assert.ok(text.includes("delegate_task stub"));
-    assert.ok(text.includes("builder"));
+    const payload = JSON.parse(result.content[0].text);
+    assert.ok(payload.workerId.startsWith("worker-"));
+    assert.equal(payload.status, "failed");
+    assert.ok(payload.error.includes("Unknown agent profile"));
+    assert.ok(payload.error.includes("nonexistent"));
+
+    const record = _testing.getWorkerMap().get(payload.workerId);
+    assert.equal(record.status, "failed");
+    assert.ok(record.error.includes("nonexistent"));
   });
 
-  it("wait_for_agents tool returns a stub response", async () => {
+  it("delegate_task fails gracefully when the worker exits non-zero", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createMockChild("", "spawn failed\n", 1);
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const result = await tool.execute(
+      "call-3",
+      { title: "Bad worker", goal: "fail", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.status, "failed");
+    assert.ok(payload.error.includes("exited with code 1"));
+
+    const record = _testing.getWorkerMap().get(payload.workerId);
+    assert.equal(record.status, "failed");
+    assert.ok(record.stderr.includes("spawn failed"));
+  });
+
+  it("delegate_task fails gracefully when no final_answer block is found", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createMockChild("plain text without final answer", "", 0);
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const result = await tool.execute(
+      "call-4",
+      { title: "No final answer", goal: "return plain text", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    const payload = JSON.parse(result.content[0].text);
+    assert.equal(payload.status, "failed");
+    assert.ok(payload.error.includes("No <final_answer>"));
+
+    const record = _testing.getWorkerMap().get(payload.workerId);
+    assert.equal(record.status, "failed");
+  });
+
+  it("wait_for_agents returns tracked worker statuses", async () => {
     const pi = createMockPi();
     extensionFactory(pi);
 
-    const tool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
-    const result = await tool.execute("call-2", { workerIds: ["worker-1"], timeoutMs: 5000 });
+    const delegateTool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
 
-    const text = result.content[0].text;
-    assert.ok(text.includes("wait_for_agents stub"));
-    assert.ok(text.includes("worker-1"));
+    const delegateResult = await delegateTool.execute(
+      "call-5",
+      { title: "Tracked task", goal: "do work", profileName: "nonexistent" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+    const workerId = JSON.parse(delegateResult.content[0].text).workerId;
+
+    const waitResult = await waitTool.execute("call-6", { workerIds: [workerId], timeoutMs: 1000 });
+    const payload = JSON.parse(waitResult.content[0].text);
+    assert.equal(payload.workers.length, 1);
+    assert.equal(payload.workers[0].workerId, workerId);
+    assert.equal(payload.workers[0].status, "failed");
   });
 });
