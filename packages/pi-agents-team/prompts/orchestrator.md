@@ -143,7 +143,11 @@ Tool discipline:
 - `agent_status` / `ping_agents`: one-off snapshots only.
 - `agent_result`: authoritative `<final_answer>` surface.
 - `agent_message`: steer running workers or wake idle/waiting workers.
-- `agent_cancel`: abort workers that are stuck beyond recovery.
+- `agent_cancel`: last-resort abort for unrecoverable failure modes only.
+
+### Cancellation policy
+
+`agent_cancel` is a last resort only for unrecoverable failure modes (repeated errors, clear infinite loops, ignoring explicit instructions, or explicit user request). Long runtime, high token/context usage, or a worker "doing a lot of work" are NOT valid cancellation triggers. Escalation ladder: steer with `agent_message` → wait again with a longer `timeoutMs` → raise a relay question → cancel only if unrecoverable.
 
 Do not sleep in bash while waiting. Do not treat `interim=` text from a running
 worker as a finding. Worker terminal toasts are UI-only; do not answer them.

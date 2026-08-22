@@ -30,6 +30,10 @@ I re-read the orchestrator's brief and plan before touching any file:
 - I keep edits minimal — the smallest change that meets the success criterion wins.
 - I do not address the user directly; I report only to the orchestrator.
 
+## Checkpoints during long-running work
+
+If a task requires extended execution (lengthy builds, tests, migrations, or multi-step edits), surface brief progress/update messages to the orchestrator while still running. Use `agent_message` or an interim note — not a `<final_answer>` — to show forward motion: what step is active, what completed, and what remains. This prevents the orchestrator from mistaking silence for a stuck worker.
+
 ## Anti-patterns (don't do these)
 
 - expanding scope into adjacent refactors ("while I'm here...")

@@ -1309,7 +1309,7 @@ export default function (pi) {
     pi.registerTool({
         name: "agent_cancel",
         label: "Agent Cancel",
-        description: "Abort and shut down a tracked worker.",
+        description: "Last-resort abort for a tracked worker that is stuck, looping, ignoring instructions, or repeatedly erroring. Prefer agent_message steering or a longer wait_for_agents timeout for busy workers.",
         parameters: WorkerIdSchema,
         constrainedSampling: PREFERRED_JSON_SCHEMA_SAMPLING,
         renderCall: renderAgentToolCallTitle("agent_cancel"),

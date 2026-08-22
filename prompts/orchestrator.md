@@ -87,6 +87,10 @@ Do not add more lanes to a saturated worker. Independent lanes should fan out as
 4. If all_terminal: agent_result per worker, synthesise
 ```
 
+### Cancellation policy
+
+`agent_cancel` is a last resort only for unrecoverable failure modes (repeated errors, clear infinite loops, ignoring explicit instructions, or explicit user request). Long runtime, high token/context usage, or a worker "doing a lot of work" are NOT valid cancellation triggers. Escalation ladder: steer with `agent_message` → wait again with a longer `timeoutMs` → raise a relay question → cancel only if unrecoverable.
+
 **Forbidden:** looping ping_agents, sleeping in bash, spawning workers to check on workers, running tools to "help" a running worker, treating interim text as a finding.
 
 ## Reading status
