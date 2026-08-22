@@ -145,6 +145,57 @@ function buildAgentPromptBlock(agents) {
   ].join("\n");
 }
 
+function formatAgentListDetailed(agents) {
+  if (agents.length === 0) return "No agents discovered.";
+  const lines = ["Available team agents:", ""];
+  for (const agent of agents) {
+    lines.push(`- ${agent.name}: ${agent.description}`);
+    const meta = [];
+    if (agent.tools?.length) meta.push(`tools: ${agent.tools.join(", ")}`);
+    if (agent.model) meta.push(`model: ${agent.model}`);
+    if (agent.thinkingLevel) meta.push(`thinkingLevel: ${agent.thinkingLevel}`);
+    if (meta.length) lines.push(`  ${meta.join(" | ")}`);
+  }
+  lines.push("");
+  lines.push('Delegate with: `delegate_task` using profileName "<agent-name>" etc.');
+  return lines.join("\n");
+}
+
+function formatAgentDetail(agent) {
+  const lines = [
+    `Agent: ${agent.name}`,
+    `Description: ${agent.description}`,
+  ];
+  if (agent.tools?.length) lines.push(`Tools: ${agent.tools.join(", ")}`);
+  if (agent.model) lines.push(`Model: ${agent.model}`);
+  if (agent.thinkingLevel) lines.push(`Thinking level: ${agent.thinkingLevel}`);
+  lines.push("");
+  lines.push(`Delegate with: \`delegate_task\` using profileName "${agent.name}" etc.`);
+  if (agent.systemPrompt?.trim()) {
+    lines.push("");
+    lines.push(agent.systemPrompt.trim());
+  }
+  return lines.join("\n");
+}
+
+function findAgentByQuery(agents, query) {
+  const normalized = query.trim().split(/\s+/)[0].toLowerCase();
+  return agents.find((a) => a.name.toLowerCase() === normalized);
+}
+
+function sendAgentOutput(pi, ctx, text) {
+  const send = typeof ctx?.sendMessage === "function" ? ctx.sendMessage.bind(ctx) : pi.sendMessage?.bind(pi);
+  if (send) {
+    send({
+      customType: AGENTS_MESSAGE_TYPE,
+      content: [{ type: "text", text }],
+      display: true,
+    });
+    return;
+  }
+  console.log(text);
+}
+
 const DelegateTaskSchema = Type.Object(
   {
     title: Type.String({ description: "Short title for the delegated task" }),
@@ -244,7 +295,11 @@ export const _testing = {
   discoverAgents,
   hasProjectAgents,
   formatAgentList,
+  formatAgentListDetailed,
+  formatAgentDetail,
   buildAgentPromptBlock,
+  findAgentByQuery,
+  sendAgentOutput,
   getWorkerMap: () => workers,
   clearWorkers: () => workers.clear(),
   buildWorkerTaskText,
@@ -460,16 +515,29 @@ export default function (pi, options = {}) {
   });
 
   pi.registerCommand("agents", {
-    description: "List discovered team agents from .pi/agents/*.md",
-    handler: async (_args, ctx) => {
+    description: "List discovered team agents from .pi/agents/*.md, or show details: /agents <name>",
+    handler: async (args, ctx) => {
       const cwd = ctx.cwd ?? process.cwd();
       const agents = discoverAgents(cwd);
-      const text = agents.length === 0 ? "No agents discovered." : formatAgentList(agents);
-      pi.sendMessage({
-        customType: AGENTS_MESSAGE_TYPE,
-        content: [{ type: "text", text }],
-        display: true,
-      });
+      const query = typeof args === "string" ? args.trim() : "";
+
+      if (!query) {
+        sendAgentOutput(pi, ctx, formatAgentListDetailed(agents));
+        return;
+      }
+
+      const agent = findAgentByQuery(agents, query);
+      if (!agent) {
+        const available = agents.map((a) => a.name).join(", ") || "none";
+        sendAgentOutput(
+          pi,
+          ctx,
+          `Agent "${query}" not found. Available agents: ${available}.`,
+        );
+        return;
+      }
+
+      sendAgentOutput(pi, ctx, formatAgentDetail(agent));
     },
   });
 

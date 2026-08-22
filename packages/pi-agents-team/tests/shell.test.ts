@@ -134,8 +134,41 @@ describe("Path A thin extension shell", () => {
     assert.equal(pi.messages.length, 1);
     assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
     const text = pi.messages[0].content[0].text as string;
+    assert.ok(text.includes("Available team agents:"));
     assert.ok(text.includes("builder:"));
     assert.ok(text.includes("verifier:"));
+    assert.ok(text.includes("tools:"));
+    assert.ok(text.includes("Delegate with:"));
+  });
+
+  it("/agents builder shows detailed builder profile", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const cmd = pi.commands.find((c) => c.name === "agents")!;
+    await cmd.def.handler("builder", createMockContext());
+
+    assert.equal(pi.messages.length, 1);
+    assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
+    const text = pi.messages[0].content[0].text as string;
+    assert.ok(text.includes("Agent: builder"));
+    assert.ok(text.includes("Builder Worker Contract"));
+    assert.ok(text.includes('Delegate with: `delegate_task` using profileName "builder" etc.'));
+  });
+
+  it("/agents unknown returns a friendly not found message", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const cmd = pi.commands.find((c) => c.name === "agents")!;
+    await cmd.def.handler("unknown", createMockContext());
+
+    assert.equal(pi.messages.length, 1);
+    assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
+    const text = pi.messages[0].content[0].text as string;
+    assert.ok(text.includes('Agent "unknown" not found.'));
+    assert.ok(text.includes("Available agents:"));
+    assert.ok(text.includes("builder"));
   });
 
   it("delegate_task spawns a worker with the right command and arguments", async () => {
