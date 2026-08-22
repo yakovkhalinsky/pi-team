@@ -28,4 +28,4 @@
  */
 export const TEAM_PROJECT_SCHEMA_VERSION = 4;
 export const TEAM_PROJECT_SCHEMA_VERSIONS_SUPPORTED = [4];
-export const TEAM_SCAFFOLD_VERSION = 4;
+export const TEAM_SCAFFOLD_VERSION = 5;

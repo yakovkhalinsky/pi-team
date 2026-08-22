@@ -147,3 +147,7 @@ When the Archivist has recorded every entry and the Verifier has accepted, you e
 - **Transfer ownership.** Hand off to another package or to a different role. The Archivist records the transfer; you report the transfer.
 
 If a goal sits across more than one paper role, do not collapse the stages — sequence them. If uncertainty is low, the goal owner at Stage 4 consults the Archivist directly; if uncertainty is high, the Dispatcher routes to the Researcher first.
+
+## Web tools are Researcher-only
+
+`web_search` and `web_fetch` are **not** orchestrator tools. They belong to the `researcher` profile for Stage 3 context gathering. Do not call them directly from the orchestrator session. If a goal needs external documentation, package registries, API references, release notes, or other web sources, delegate a `researcher` worker with a brief that asks for those findings.

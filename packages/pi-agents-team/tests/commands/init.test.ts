@@ -23,4 +23,13 @@ describe("/team-init scaffold", () => {
     assert.deepEqual(scaffold.memory, DEFAULT_TEAM_CONFIG.memory);
     assert.deepEqual(scaffold.worktree, DEFAULT_TEAM_CONFIG.worktree);
   });
+
+  it("grants the researcher web_search and web_fetch tools", () => {
+    const scaffold = _testing.buildFullScaffold();
+    const researcher = scaffold.roles?.researcher;
+    assert.ok(researcher, "researcher role is present in scaffold");
+    assert.ok(Array.isArray(researcher.access?.tools), "researcher has access.tools");
+    assert.ok(researcher.access?.tools.includes("web_search"), "researcher has web_search");
+    assert.ok(researcher.access?.tools.includes("web_fetch"), "researcher has web_fetch");
+  });
 });

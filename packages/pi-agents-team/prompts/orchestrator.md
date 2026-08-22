@@ -97,6 +97,10 @@ Briefs must be self-sufficient and include `title`, `goal`, `contextHints`, and
 - Steer running workers when priorities change.
 - Send follow-up prompts to idle workers when that is cheaper than re-delegating.
 
+## Web tools are Researcher-only
+
+`web_search` and `web_fetch` are **not** orchestrator tools. They belong to the `researcher` profile for Stage 3 context gathering. Do not call them directly from the orchestrator session. If a goal needs external documentation, package registries, API references, release notes, or other web sources, delegate a `researcher` worker with a brief that asks for those findings.
+
 ## Reuse
 
 - When the next task fits the same role and roughly the same path scope as a

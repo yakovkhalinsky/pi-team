@@ -197,6 +197,33 @@ pi /team-enable on     # team mode (default after install)
 pi /team-enable off    # solo mode (standard pi without workers)
 ```
 
+## Web research extensions
+
+`web_search` and `web_fetch` are Researcher-only tools for Stage 3 context gathering. The Researcher uses them to reduce uncertainty from external sources such as package registries, API references, release notes, and documentation.
+
+Install web-search extensions **project-locally**, not globally:
+
+```bash
+pi install -l npm:@earendil-works/pi-web-search
+```
+
+Do not install them globally (`pi install npm:...`) because the orchestrator must never invoke `web_search` or `web_fetch` itself. Scope the extension to the `researcher` role by adding it to `access.extensions` in `.pi/agent/agents-team.json`:
+
+```json
+{
+  "roles": {
+    "researcher": {
+      "access": {
+        "tools": ["read", "bash", "grep", "find", "ls", "web_search", "web_fetch"],
+        "extensions": ["npm:@earendil-works/pi-web-search"]
+      }
+    }
+  }
+}
+```
+
+The install-time `agents-team.json` already includes `web_search` and `web_fetch` in the Researcher's tool list. The orchestrator contract explicitly forbids calling those tools from the main session — always delegate web research to a `researcher` worker.
+
 ## Operator commands
 
 | Command | What it does |

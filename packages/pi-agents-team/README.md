@@ -71,6 +71,33 @@ Slash commands available once the extension is loaded. The orchestrator's own to
 
 In TUI sessions that support editor autocomplete, type `@` to complete tracked workers (`@w1`) and `$` to complete configured roles (`$verifier`) while writing prompts or command arguments.
 
+## Web research extensions
+
+`web_search` and `web_fetch` are Researcher-only tools for Stage 3 context gathering. The Researcher uses them to reduce uncertainty from external sources such as package registries, API references, release notes, and documentation.
+
+Install web-search extensions **project-locally**, not globally:
+
+```bash
+pi install -l npm:@earendil-works/pi-web-search
+```
+
+Do not install them globally (`pi install npm:...`) because the orchestrator must never invoke `web_search` or `web_fetch` itself. Scope the extension to the `researcher` role by adding it to `access.extensions` in `.pi/agent/agents-team.json`:
+
+```json
+{
+  "roles": {
+    "researcher": {
+      "access": {
+        "tools": ["read", "bash", "grep", "find", "ls", "web_search", "web_fetch"],
+        "extensions": ["npm:@earendil-works/pi-web-search"]
+      }
+    }
+  }
+}
+```
+
+The built-in `/team-init` scaffold already grants the Researcher `web_search` and `web_fetch` tools. The orchestrator contract explicitly forbids calling those tools from the main session — always delegate web research to a `researcher` worker.
+
 ## Durable ATP record keeping with eden-memory
 
 Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. The integration is **opt-in**: set `memory.edenMemory.enabled: true` in `agents-team.json` (or keep it off to skip all memory writes) and run `/team-env` to scaffold the project `.env`.

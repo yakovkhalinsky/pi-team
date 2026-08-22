@@ -355,9 +355,9 @@ export const DEFAULT_TEAM_CONFIG = {
         },
         {
             name: TEAM_PROFILE_NAMES[4],
-            description: "Reduce uncertainty. I gather context, surface alternatives with trade-offs, and land findings the team can act on.",
+            description: "Reduce uncertainty. I gather context from the codebase, external sources, and live system signals; surface alternatives with trade-offs; and land findings the team can act on.",
             thinkingLevel: "medium",
-            tools: ["read", "grep", "find", "ls", "bash"],
+            tools: ["read", "grep", "find", "ls", "bash", "web_search", "web_fetch"],
             promptPath: "prompts/agents/researcher.md",
             extensionMode: "worker-minimal",
             writePolicy: "read-only",

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "scaffoldVersion": 4,
+  "scaffoldVersion": 5,
   "enabled": true,
   "routingMode": "team",
   "workerAccess": {
@@ -32,6 +32,9 @@
       "whenToUse": "Use for Stage 3 (Context gathering) when uncertainty is high — reduce uncertainty before a decision lands, surface alternatives with trade-offs, land findings in the durable record. The paper: the Researcher leads when uncertainty is high.",
       "model": "default",
       "thinkingLevel": "high",
+      "access": {
+        "tools": ["read", "bash", "grep", "find", "ls", "web_search", "web_fetch"]
+      },
       "prompt": ".pi-team/prompts/agents/researcher.md"
     },
     "builder": {
