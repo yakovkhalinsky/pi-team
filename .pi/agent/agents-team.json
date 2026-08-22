@@ -9,6 +9,18 @@
   "display": {
     "cost": true
   },
+  "memory": {
+    "edenMemory": {
+      "enabled": true,
+      "semanticSearch": false
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "basePath": ".pi-team/worktrees",
+    "cleanupOnTerminal": true,
+    "cleanupOnPrune": true
+  },
   "roles": {
     "dispatcher": {
       "whenToUse": "Route and assign work. I classify the goal, set priority, record ownership and confidence, and name the next role. No goal skips dispatch.",

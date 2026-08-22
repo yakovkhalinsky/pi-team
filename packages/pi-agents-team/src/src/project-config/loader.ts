@@ -578,7 +578,7 @@ function mergeWorktreeConfig(baseConfig, parsed) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw))
         return baseConfig;
     const pickBoolean = (key, fallback) => typeof raw[key] === "boolean" ? raw[key] : fallback;
-    const base = baseConfig.worktree ?? { enabled: false, basePath: ".pi-team/worktrees", cleanupOnTerminal: true, cleanupOnPrune: true };
+    const base = baseConfig.worktree ?? { enabled: true, basePath: ".pi-team/worktrees", cleanupOnTerminal: true, cleanupOnPrune: true };
     const worktree = {
         enabled: pickBoolean("enabled", base.enabled),
         basePath: typeof raw.basePath === "string" ? raw.basePath : base.basePath,

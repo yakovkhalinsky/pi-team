@@ -307,7 +307,7 @@ export const DEFAULT_TEAM_CONFIG = {
         },
     },
     worktree: {
-        enabled: false,
+        enabled: true,
         basePath: ".pi-team/worktrees",
         cleanupOnTerminal: true,
         cleanupOnPrune: true,

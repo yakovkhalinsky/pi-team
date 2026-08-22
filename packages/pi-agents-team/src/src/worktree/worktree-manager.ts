@@ -82,7 +82,7 @@ export class WorktreeManager {
     paths = new Map();
     constructor(options = {}, runExecFile = defaultExecFile) {
         this.options = {
-            enabled: options.enabled ?? false,
+            enabled: options.enabled ?? true,
             basePath: options.basePath ?? DEFAULT_WORKTREE_BASE_PATH,
             cleanupOnTerminal: options.cleanupOnTerminal ?? true,
             cleanupOnPrune: options.cleanupOnPrune ?? true,

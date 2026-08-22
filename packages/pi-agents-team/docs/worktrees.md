@@ -1,10 +1,10 @@
 # Parallel git worktrees
 
-Pi Agents Team can run each delegated task in its own git worktree so that parallel builders, runtimes, and verifiers do not collide on the same checked-out working tree. Worktree support is **disabled by default** and is opt-in via `agents-team.json`.
+Pi Agents Team can run each delegated task in its own git worktree so that parallel builders, runtimes, and verifiers do not collide on the same checked-out working tree. Worktree support is **enabled by default**. You can add an explicit `worktree` block to your `agents-team.json` to override defaults or disable it.
 
-## When to enable worktrees
+## When to disable worktrees
 
-Enable worktrees when you routinely delegate multiple concurrent tasks that write files or run builds/tests in the same repository. Isolating each worker in its own checkout prevents:
+For simple, read-only analysis tasks where sharing the orchestrator's working tree is fine, set `worktree.enabled: false`. Isolating each worker in its own checkout prevents:
 
 - Uncommitted file changes from one worker confusing another.
 - Build artefacts, `node_modules`, or generated files from parallel jobs clobbering each other.
@@ -32,12 +32,12 @@ Add a top-level `worktree` block to `agents-team.json`:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Master switch. When `false`, workers use the requested `cwd` directly. |
+| `enabled` | `true` | Master switch. When `false`, workers use the requested `cwd` directly. |
 | `basePath` | `.pi-team/worktrees` | Directory under the git root where worktrees are created. Absolute paths are used as-is; relative paths resolve against the repo root. |
 | `cleanupOnTerminal` | `true` | Remove the worktree when the worker becomes terminal via cancel, close, error, or normal completion. |
 | `cleanupOnPrune` | `true` | Remove the worktree when `/team` prune (or the `p` dashboard key) evicts a terminal worker. |
 
-If `worktree` is omitted, the defaults above apply with `enabled: false`.
+If `worktree` is omitted, the defaults above apply with `enabled: true`.
 
 ## How it works
 

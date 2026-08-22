@@ -62,7 +62,7 @@ function buildFullScaffold() {
             },
         },
         worktree: {
-            enabled: false,
+            enabled: true,
             basePath: ".pi-team/worktrees",
             cleanupOnTerminal: true,
             cleanupOnPrune: true,

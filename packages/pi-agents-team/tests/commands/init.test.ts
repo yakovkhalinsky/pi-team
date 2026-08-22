@@ -11,7 +11,7 @@ describe("/team-init scaffold", () => {
 
   it("includes the worktree block with safe defaults", () => {
     const scaffold = _testing.buildFullScaffold();
-    assert.equal(scaffold.worktree?.enabled, false);
+    assert.equal(scaffold.worktree?.enabled, true);
     assert.equal(scaffold.worktree?.basePath, ".pi-team/worktrees");
     assert.equal(scaffold.worktree?.cleanupOnTerminal, true);
     assert.equal(scaffold.worktree?.cleanupOnPrune, true);
