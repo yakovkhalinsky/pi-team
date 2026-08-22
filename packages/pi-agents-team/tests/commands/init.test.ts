@@ -8,4 +8,12 @@ describe("/team-init scaffold", () => {
     assert.equal(scaffold.memory?.edenMemory?.enabled, false);
     assert.equal(scaffold.memory?.edenMemory?.semanticSearch, false);
   });
+
+  it("includes the worktree block with safe defaults", () => {
+    const scaffold = _testing.buildFullScaffold();
+    assert.equal(scaffold.worktree?.enabled, false);
+    assert.equal(scaffold.worktree?.basePath, ".pi-team/worktrees");
+    assert.equal(scaffold.worktree?.cleanupOnTerminal, true);
+    assert.equal(scaffold.worktree?.cleanupOnPrune, true);
+  });
 });

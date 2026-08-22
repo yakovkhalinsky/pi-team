@@ -573,6 +573,23 @@ function mergeEdenMemoryConfig(baseConfig, parsed) {
     };
     return { ...baseConfig, memory };
 }
+function mergeWorktreeConfig(baseConfig, parsed) {
+    const raw = parsed?.worktree;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+        return baseConfig;
+    const pickBoolean = (key, fallback) => typeof raw[key] === "boolean" ? raw[key] : fallback;
+    const base = baseConfig.worktree ?? { enabled: false, basePath: ".pi-team/worktrees", cleanupOnTerminal: true, cleanupOnPrune: true };
+    const worktree = {
+        enabled: pickBoolean("enabled", base.enabled),
+        basePath: typeof raw.basePath === "string" ? raw.basePath : base.basePath,
+        cleanupOnTerminal: pickBoolean("cleanupOnTerminal", base.cleanupOnTerminal),
+        cleanupOnPrune: pickBoolean("cleanupOnPrune", base.cleanupOnPrune),
+    };
+    return { ...baseConfig, worktree };
+}
+function mergeLayerConfigs(baseConfig, parsed) {
+    return mergeWorktreeConfig(mergeEdenMemoryConfig(baseConfig, parsed), parsed);
+}
 export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     const baseConfig = cloneTeamConfig(options.baseConfig ?? DEFAULT_TEAM_CONFIG);
     let globalPath;
@@ -704,7 +721,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
         }
         return {
             status: "invalid",
-            config: mergeEdenMemoryConfig(baseConfig, winningLayer?.parsed),
+            config: mergeLayerConfigs(baseConfig, winningLayer?.parsed),
             sourcePath: projectPath ?? globalPath,
             projectRoot: projectPath ? computeLayerRoot("project", projectPath) : options.cwd,
             layers,
@@ -752,7 +769,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
         diagnostics.push(...nonWinningFatalDiagnostics);
         return {
             status: "invalid",
-            config: mergeEdenMemoryConfig(baseConfig, winningLayer?.parsed),
+            config: mergeLayerConfigs(baseConfig, winningLayer?.parsed),
             sourcePath: projectPath ?? globalPath,
             projectRoot: projectPath ? computeLayerRoot("project", projectPath) : options.cwd,
             layers,
@@ -780,7 +797,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     if (parsedLayers.length === 0 || !winningLayer) {
         return {
             status: "builtin",
-            config: mergeEdenMemoryConfig({
+            config: mergeLayerConfigs({
                 ...baseConfig,
                 safety: {
                     ...baseConfig.safety,
@@ -807,7 +824,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
     const allowWorkerPathsOutsideProject = winningLayer.parsed.workerAccess?.allowPathsOutsideProject !== false;
     return {
         status: "project",
-        config: mergeEdenMemoryConfig({
+        config: mergeLayerConfigs({
             ...baseConfig,
             safety: {
                 ...baseConfig.safety,

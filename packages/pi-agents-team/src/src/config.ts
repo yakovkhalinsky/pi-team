@@ -78,6 +78,13 @@ export const TeamMemoryConfigSchema = Type.Object({
     edenMemory: Type.Optional(EdenMemoryConfigSchema),
 }, { additionalProperties: false });
 
+export const TeamWorktreeConfigSchema = Type.Object({
+    enabled: Type.Boolean({ default: false }),
+    basePath: Type.String({ default: ".pi-team/worktrees" }),
+    cleanupOnTerminal: Type.Boolean({ default: true }),
+    cleanupOnPrune: Type.Boolean({ default: true }),
+}, { additionalProperties: false });
+
 /**
  * Role keys are free-form — users own the role map. `schemaVersion` is
  * validated at parse time as a number (not a literal) so older files still
@@ -100,6 +107,7 @@ export const TeamProjectConfigSchema = Type.Object({
     workerAccess: Type.Optional(TeamProjectWorkerAccessSchema),
     display: Type.Optional(TeamProjectDisplaySchema),
     memory: Type.Optional(TeamMemoryConfigSchema),
+    worktree: Type.Optional(TeamWorktreeConfigSchema),
     roles: Type.Optional(Type.Record(Type.String(), ProjectRoleConfigSchema)),
 }, { additionalProperties: false });
 export const WorkerUsageStatsSchema = Type.Object({
@@ -179,6 +187,7 @@ export const WorkerRuntimeStateSchema = Type.Object({
     pendingRelayQuestions: Type.Array(RelayQuestionSchema),
     usage: WorkerUsageStatsSchema,
     error: Type.Optional(Type.String()),
+    worktreePath: Type.Optional(Type.String()),
 });
 export const TeamUiStateSchema = Type.Object({
     statusKey: Type.String(),
@@ -228,6 +237,7 @@ export const TeamConfigSchema = Type.Object({
         storeTranscripts: Type.Boolean({ default: false }),
     }),
     memory: Type.Optional(TeamMemoryConfigSchema),
+    worktree: Type.Optional(TeamWorktreeConfigSchema),
     profiles: Type.Array(TeamProfileSpecSchema),
 });
 export const PersistedTeamStateSchema = Type.Object({
@@ -295,6 +305,12 @@ export const DEFAULT_TEAM_CONFIG = {
             enabled: true,
             semanticSearch: false,
         },
+    },
+    worktree: {
+        enabled: false,
+        basePath: ".pi-team/worktrees",
+        cleanupOnTerminal: true,
+        cleanupOnPrune: true,
     },
     profiles: [
         {
@@ -406,6 +422,11 @@ export function buildOrchestratorSystemPrompt(state, config = DEFAULT_TEAM_CONFI
     const profileList = config.profiles.map((profile) => profile.name).join(", ");
     const activeWorkerCount = Object.keys(state.activeWorkers).length;
     const relayCount = state.relayQueue.length;
+    const worktreeEnabled = config.worktree?.enabled === true;
+    const worktreeBase = config.worktree?.basePath ?? ".pi-team/worktrees";
+    const worktreeNote = worktreeEnabled
+        ? `Git worktrees are enabled: each new worker gets its own checkout under ${worktreeBase} inside the repo root. Reused workers keep their existing worktree. Workers report their worktree path in status, dashboard, and copy output.`
+        : "Git worktrees are disabled: workers share the orchestrator's working tree unless a task sets cwd explicitly.";
     return [
         `# ${config.orchestration.systemPromptTitle}`,
         "",
@@ -416,6 +437,7 @@ export function buildOrchestratorSystemPrompt(state, config = DEFAULT_TEAM_CONFI
         `- Active worker count in this session snapshot: ${activeWorkerCount}.`,
         `- Pending relay questions in this session snapshot: ${relayCount}.`,
         `- Worker transport contract: ${config.rpc.transport} via ${[config.rpc.command, ...config.rpc.args].join(" ")}.`,
+        `- ${worktreeNote}`,
         `- Safety defaults: recursion prevention=${String(config.safety.preventRecursiveOrchestrator)}, require path scope for writes=${String(config.safety.requirePathScopeForWrites)}, allow worker paths outside project=${String(config.safety.allowWorkerPathsOutsideProject)}.`,
     ].join("\n");
 }

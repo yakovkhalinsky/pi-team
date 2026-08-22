@@ -7,6 +7,7 @@ import { buildWorkerTaskPrompt } from "../prompts/contracts.js";
 import { WorkerManager } from "../runtime/worker-manager.js";
 import { applyLaunchPolicy } from "../safety/launch-policy.js";
 import { isPathWithinProjectRoot } from "../safety/path-scope.js";
+import { WorktreeManager } from "../worktree/worktree-manager.js";
 import { aggregateWorkerUsage } from "../usage.js";
 const TERMINAL_STATUSES = new Set([
     "idle",
@@ -81,6 +82,7 @@ export class TeamManager {
     events = new EventEmitter();
     registry;
     workerManager;
+    worktreeManager;
     workerCounter = 0;
     taskCounter = 0;
     _routingMode;
@@ -91,6 +93,7 @@ export class TeamManager {
         this.config = options?.config ?? DEFAULT_TEAM_CONFIG;
         this.registry = options?.registry ?? new TaskRegistry();
         this.workerManager = options?.workerManager ?? new WorkerManager();
+        this.worktreeManager = options?.worktreeManager ?? new WorktreeManager(this.config.worktree);
         this._routingMode = options?.routingMode ?? "team";
         this.activePingTimeoutMs = options?.activePingTimeoutMs ?? ACTIVE_PING_REFRESH_TIMEOUT_MS;
         this.displayCost = options?.displayCost !== false;
@@ -190,6 +193,8 @@ export class TeamManager {
         const projectTrust = resolveWorkerProjectTrustOverride(request, launchPlan.cwd);
         const taskId = this.nextTaskId();
         const workerId = this.nextWorkerId();
+        const workerCwd = await this.worktreeManager.resolveWorkerCwd(launchPlan.cwd, workerId);
+        const worktreePath = workerCwd !== launchPlan.cwd ? workerCwd : undefined;
         const skills = request.skills?.map((name) => name.trim()).filter((name) => name.length > 0);
         const task = {
             taskId,
@@ -212,7 +217,8 @@ export class TeamManager {
                 workerId,
                 profileName: request.profileName,
                 task,
-                cwd: launchPlan.cwd,
+                cwd: workerCwd,
+                worktreePath,
                 model: launchPlan.model,
                 thinkingLevel: launchPlan.thinkingLevel,
                 tools: launchPlan.tools,
@@ -234,9 +240,19 @@ export class TeamManager {
         catch (error) {
             this.registry.removeWorker(workerId);
             this.registry.unregisterTask(taskId);
+            if (worktreePath) {
+                try {
+                    await this.worktreeManager.removeWorktree(workerId, true);
+                }
+                catch {
+                    // Best-effort cleanup; preserve the launch error.
+                }
+            }
             this.events.emit("state_change", this.snapshot());
             throw error;
         }
+        if (worktreePath)
+            worker.state.worktreePath = worktreePath;
         this.registry.upsertWorker(worker.state);
         try {
             signal?.throwIfAborted();
@@ -253,6 +269,14 @@ export class TeamManager {
             await this.workerManager.removeWorker(workerId);
             this.registry.removeWorker(workerId);
             this.registry.unregisterTask(taskId);
+            if (worktreePath) {
+                try {
+                    await this.worktreeManager.removeWorktree(workerId, true);
+                }
+                catch {
+                    // Best-effort cleanup; preserve the cancellation error.
+                }
+            }
             this.events.emit("state_change", this.snapshot());
             throw error;
         }
@@ -502,6 +526,8 @@ export class TeamManager {
             systemPromptPath: request.systemPromptPath,
         }, this.config);
         const projectTrust = resolveWorkerProjectTrustOverride(request, launchPlan.cwd);
+        const workerCwd = await this.worktreeManager.resolveWorkerCwd(launchPlan.cwd, resolvedId);
+        const worktreePath = workerCwd !== launchPlan.cwd ? workerCwd : undefined;
         const skills = request.skills?.map((name) => name.trim()).filter((name) => name.length > 0);
         const newAllowSkills = skills !== undefined && skills.length > 0;
         const existing = this.workerManager.getLaunchSnapshot(resolvedId);
@@ -509,8 +535,8 @@ export class TeamManager {
             throw new Error(`Cannot reuse worker ${resolvedId}: runtime record missing. Delegate fresh.`);
         }
         const mismatches = [];
-        if (existing.cwd !== launchPlan.cwd)
-            mismatches.push(`cwd (${existing.cwd} → ${launchPlan.cwd})`);
+        if (existing.cwd !== workerCwd)
+            mismatches.push(`cwd (${existing.cwd} → ${workerCwd})`);
         if (existing.command !== this.config.rpc.command) {
             mismatches.push(`command (${existing.command ?? "pi"} → ${this.config.rpc.command})`);
         }
@@ -564,6 +590,8 @@ export class TeamManager {
         };
         this.registry.registerTask(task);
         const preparedWorker = this.workerManager.prepareWorkerReuse(resolvedId, task);
+        if (worktreePath && !preparedWorker.state.worktreePath)
+            preparedWorker.state.worktreePath = worktreePath;
         this.registry.upsertWorker(preparedWorker.state);
         try {
             signal?.throwIfAborted();
@@ -602,6 +630,14 @@ export class TeamManager {
         if (!updated) {
             throw new Error(`Unknown worker: ${workerId}`);
         }
+        if (this.config.worktree?.cleanupOnTerminal) {
+            try {
+                await this.worktreeManager.removeWorktree(workerId);
+            }
+            catch {
+                // Best-effort cleanup.
+            }
+        }
         this.events.emit("state_change", this.snapshot());
         return this.requireResult(workerId);
     }
@@ -631,12 +667,21 @@ export class TeamManager {
         if (!worker) {
             throw new Error(`Unknown worker: ${workerId}`);
         }
+        if (this.config.worktree?.cleanupOnTerminal) {
+            try {
+                await this.worktreeManager.removeWorktree(workerId);
+            }
+            catch {
+                // Best-effort cleanup.
+            }
+        }
         this.events.emit("state_change", this.snapshot());
         return this.requireResult(workerId);
     }
     async dispose() {
         this.activeRefreshes.clear();
         await this.workerManager.dispose();
+        await this.worktreeManager.removeAllWorktrees();
     }
     async pruneTerminalWorkers() {
         const terminal = this.registry.listWorkers().filter((worker) => isTerminalWorkerStatus(worker.status));
@@ -649,6 +694,14 @@ export class TeamManager {
                 }
                 catch {
                     // Best-effort: don't let runtime cleanup failure block dashboard prune.
+                }
+            }
+            if (this.config.worktree?.cleanupOnPrune) {
+                try {
+                    await this.worktreeManager.removeWorktree(worker.workerId);
+                }
+                catch {
+                    // Best-effort worktree cleanup.
                 }
             }
             const result = this.registry.removeWorker(worker.workerId);

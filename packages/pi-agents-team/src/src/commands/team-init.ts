@@ -61,6 +61,12 @@ function buildFullScaffold() {
                 semanticSearch: false,
             },
         },
+        worktree: {
+            enabled: false,
+            basePath: ".pi-team/worktrees",
+            cleanupOnTerminal: true,
+            cleanupOnPrune: true,
+        },
         roles,
     };
 }

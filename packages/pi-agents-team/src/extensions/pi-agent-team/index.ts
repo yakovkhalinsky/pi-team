@@ -942,7 +942,7 @@ export default function (pi) {
                         clearTimeout(notificationTimer);
                     notificationTimer = setTimeout(flushWorkerNotifications, 400);
                     const atpCtx = {
-                        ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title }),
+                        ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, worktreePath: worker.worktreePath }),
                     };
                     void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(), atpCtx);
                     if (worker.finalAnswer?.trim()) {
@@ -963,7 +963,7 @@ export default function (pi) {
                     const newest = worker.pendingRelayQuestions[worker.pendingRelayQuestions.length - 1];
                     if (newest?.question) {
                         void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(), {
-                            ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency }),
+                            ...buildAtpContext(activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency, worktreePath: worker.worktreePath }),
                         });
                     }
                 }

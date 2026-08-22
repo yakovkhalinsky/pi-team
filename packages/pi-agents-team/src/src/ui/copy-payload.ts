@@ -130,6 +130,10 @@ export function buildCopyPayload(worker, transcript, consoleEvents, activityEven
                 lines.push(`  - ${root}`);
         }
     }
+    if (worker.worktreePath) {
+        lines.push("", "## Worktree");
+        lines.push(`path: ${sanitizeTerminalText(worker.worktreePath)}`);
+    }
     lines.push("", "## Final answer");
     lines.push(sanitizeTerminalText(worker.finalAnswer ?? "").trim() || "(no <final_answer> block produced)");
     if (worker.lastSummary) {

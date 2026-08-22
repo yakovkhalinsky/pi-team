@@ -123,6 +123,25 @@ Tip: `/team-init local` writes the packaged role defaults (`dispatcher`/`verifie
 
 Config freshness warnings are based on the active config layer only: project-local wins by file presence, otherwise global. A stale or missing active `scaffoldVersion` produces a soft boot warning and the file keeps loading; refresh explicitly with `/team-init <local|global> --force` (backs up first).
 
+## Parallel git worktrees
+
+Pi Agents Team can run each delegated task in its own git worktree so concurrent builders, runtimes, and verifiers do not share the same checked-out tree. Enable it by adding a `worktree` block to `agents-team.json`:
+
+```json
+{
+  "schemaVersion": 4,
+  "enabled": true,
+  "worktree": {
+    "enabled": true,
+    "basePath": ".pi-team/worktrees",
+    "cleanupOnTerminal": true,
+    "cleanupOnPrune": true
+  }
+}
+```
+
+When enabled, the extension creates a dedicated worktree per worker under the repo root, launches the worker RPC process there, records the worktree path in worker state/dashboard/copy output, and removes the worktree on terminal/prune. Non-git projects fall back to the original `cwd`. See [docs/worktrees.md](docs/worktrees.md) for the full configuration, safety, and troubleshooting guide.
+
 ## Documentation
 
 | File | Covers |
@@ -131,6 +150,7 @@ Config freshness warnings are based on the active config layer only: project-loc
 | [Memory](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/memory.md) | eden-memory ATP integration, `.env` schema, lifecycle markers, stopping a locked DB. |
 | [Operations](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/operations.md) | Install, dashboard keys, copy flow, steer semantics, troubleshooting. |
 | [Profiles](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/profiles.md) | Default roles, how to create your own, prompt resolution, project vs global config, version bumps, launch-time safety. |
+| [Worktrees](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/worktrees.md) | Parallel git worktrees: config, lifecycle, containment, reuse, and troubleshooting. |
 | [Prompting](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/docs/prompting.md) | Orchestrator + worker prompt contracts, the `<final_answer>` rules. |
 | [Contributing](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/CONTRIBUTING.md) | Local dev setup, tests, smoke scripts, package layout. |
 | [Claude notes](https://github.com/KristjanPikhof/Pi-Agents-Team/blob/main/CLAUDE.md) | Load-bearing invariants and anti-patterns. Read before touching state transitions. |

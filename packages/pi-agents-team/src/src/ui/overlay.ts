@@ -132,6 +132,8 @@ export function buildInspectText(worker, transcript, consoleEvents, activityEven
     ];
     if (worker.lastToolName)
         statusBody.push(`${palette.dim("Last tool:")} ${sanitizeTerminalText(worker.lastToolName)}`);
+    if (worker.worktreePath)
+        statusBody.push(`${palette.dim("Worktree:")} ${sanitizeTerminalText(worker.worktreePath)}`);
     if (worker.error)
         statusBody.push(`${palette.dim("Error:")} ${palette.danger(sanitizeTerminalText(worker.error))}`);
     pushInspectBlock(lines, "Status", statusBody, palette, formatInspectStatus(worker, palette));

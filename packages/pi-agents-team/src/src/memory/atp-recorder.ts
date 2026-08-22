@@ -74,6 +74,7 @@ function buildMetadata(stage, ctx = {}) {
   if (ctx.profileName) metadata.profileName = sanitizeString(ctx.profileName, 64);
   if (ctx.packageName) metadata.packageName = sanitizeString(ctx.packageName, 128);
   if (ctx.requester) metadata.requester = sanitizeString(ctx.requester, 64);
+  if (ctx.worktreePath) metadata.worktreePath = sanitizeString(ctx.worktreePath, 260);
   if (typeof ctx.round === "number" && Number.isFinite(ctx.round)) metadata.round = ctx.round;
   if (ctx.supersedes) metadata.supersedes = sanitizeString(ctx.supersedes, 128);
   return metadata;

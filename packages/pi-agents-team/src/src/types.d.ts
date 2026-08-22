@@ -275,6 +275,13 @@ export interface WorkerRuntimeState {
     pendingRelayQuestions: RelayQuestion[];
     usage: WorkerUsageStats;
     error?: string;
+    worktreePath?: string;
+}
+export interface TeamWorktreeConfig {
+    enabled: boolean;
+    basePath: string;
+    cleanupOnTerminal: boolean;
+    cleanupOnPrune: boolean;
 }
 export interface TeamUiState {
     statusKey: string;
@@ -323,6 +330,8 @@ export interface TeamConfig {
         statusMessageType: string;
         storeTranscripts: boolean;
     };
+    memory?: TeamMemoryConfig;
+    worktree?: TeamWorktreeConfig;
     profiles: TeamProfileSpec[];
 }
 export interface CompactPersistedWorkerSummary<Status extends PersistedTerminalWorkerStatus = PersistedTerminalWorkerStatus> {

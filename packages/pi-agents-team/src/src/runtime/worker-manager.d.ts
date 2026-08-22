@@ -9,6 +9,7 @@ export interface LaunchWorkerOptions {
     profileName: string;
     task: DelegatedTaskInput;
     cwd: string;
+    worktreePath?: string;
     model?: string;
     thinkingLevel?: ThinkingLevel;
     tools?: string[];
@@ -70,6 +71,7 @@ export interface AssistantChunk {
 }
 export interface WorkerLaunchSnapshot {
     cwd: string;
+    worktreePath?: string;
     command?: string;
     baseArgs?: string[];
     model?: string;

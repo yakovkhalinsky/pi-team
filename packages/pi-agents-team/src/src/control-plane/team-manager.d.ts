@@ -1,6 +1,7 @@
 import { TaskRegistry } from "./task-registry.js";
 import { type WorkerMessageDeliveryResolved } from "../comms/agent-messaging.js";
 import { WorkerManager, type AssistantChunk, type WorkerActivityEvent, type WorkerConsoleEvent } from "../runtime/worker-manager.js";
+import type { WorktreeManager } from "../worktree/worktree-manager.js";
 import type { DelegatedTaskInput, PersistedTeamState, TeamConfig, TeamPathScope, ThinkingLevel, WorkerExtensionMode, WorkerRuntimeState, WorkerStatus, WorkerUsageAggregate } from "../types.js";
 export declare function isTerminalWorkerStatus(status: WorkerStatus): boolean;
 export type RoutingMode = "team" | "solo";
@@ -46,6 +47,7 @@ export declare class TeamManager {
     private readonly events;
     private readonly registry;
     private readonly workerManager;
+    private readonly worktreeManager;
     private workerCounter;
     private taskCounter;
     private _routingMode;
@@ -56,6 +58,7 @@ export declare class TeamManager {
         config?: TeamConfig;
         registry?: TaskRegistry;
         workerManager?: WorkerManager;
+        worktreeManager?: WorktreeManager;
         routingMode?: RoutingMode;
         displayCost?: boolean;
         activePingTimeoutMs?: number;

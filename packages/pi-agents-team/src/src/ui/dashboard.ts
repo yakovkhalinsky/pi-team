@@ -84,6 +84,8 @@ export function buildTeamDashboardLines(state, themeOrOptions, width = DEFAULT_D
         for (const worker of section.workers) {
             lines.push(truncateToWidth(`- ${formatWorkerLabel(worker)} — ${buildWorkerPrioritySnippet(worker)}`, resolvedWidth, "…"));
             lines.push(truncateToWidth(`  status: ${worker.status} (${formatWorkerStatusLabel(worker)}) · action: ${getWorkerPrimaryAction(worker)}`, resolvedWidth, "…"));
+            if (worker.worktreePath)
+                lines.push(truncateToWidth(`  worktree: ${worker.worktreePath}`, resolvedWidth, "…"));
             if (worker.currentTask?.title)
                 lines.push(truncateToWidth(`  task: ${worker.currentTask.title}`, resolvedWidth, "…"));
             lines.push(truncateToWidth(`  usage: turns=${worker.usage.turns} input=${formatCompactTokenCount(worker.usage.inputTokens)} output=${formatCompactTokenCount(worker.usage.outputTokens)}`, resolvedWidth, "…"));
@@ -106,6 +108,8 @@ export function buildNarrowInspectText(worker, width = 79) {
         lines.push(truncateToWidth(`error: ${worker.error}`, width, "…"));
     if (worker.currentTask?.title)
         lines.push(truncateToWidth(`task: ${worker.currentTask.title}`, width, "…"));
+    if (worker.worktreePath)
+        lines.push(truncateToWidth(`worktree: ${worker.worktreePath}`, width, "…"));
     if (worker.lastSummary?.headline)
         lines.push(truncateToWidth(`summary: ${worker.lastSummary.headline}`, width, "…"));
     lines.push(truncateToWidth(`usage: turns=${worker.usage.turns} in=${formatCompactTokenCount(worker.usage.inputTokens)} out=${formatCompactTokenCount(worker.usage.outputTokens)}`, width, "…"));

@@ -347,6 +347,7 @@ export class WorkerManager {
             textBufferDroppedLines: 0,
             launchSnapshot: {
                 cwd: options.cwd,
+                worktreePath: options.worktreePath,
                 command: options.command,
                 baseArgs: options.baseArgs ? [...options.baseArgs] : undefined,
                 model: options.model,

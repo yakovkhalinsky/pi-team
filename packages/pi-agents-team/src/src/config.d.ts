@@ -47,6 +47,12 @@ export declare const TeamProjectWorkerAccessSchema: Type.TObject<{
 export declare const TeamProjectDisplaySchema: Type.TObject<{
     cost: Type.TOptional<Type.TBoolean>;
 }>;
+export declare const TeamWorktreeConfigSchema: Type.TObject<{
+    enabled: Type.TBoolean;
+    basePath: Type.TString;
+    cleanupOnTerminal: Type.TBoolean;
+    cleanupOnPrune: Type.TBoolean;
+}>;
 /**
  * Schema v4 role shape. Role selection fields stay at the top level, while
  * worker capabilities and path controls live under `access`.
@@ -97,6 +103,12 @@ export declare const TeamProjectConfigSchema: Type.TObject<{
     }>>;
     display: Type.TOptional<Type.TObject<{
         cost: Type.TOptional<Type.TBoolean>;
+    }>>;
+    worktree: Type.TOptional<Type.TObject<{
+        enabled: Type.TBoolean;
+        basePath: Type.TString;
+        cleanupOnTerminal: Type.TBoolean;
+        cleanupOnPrune: Type.TBoolean;
     }>>;
     roles: Type.TOptional<Type.TRecord<"^.*$", Type.TObject<{
         whenToUse: Type.TOptional<Type.TUnion<[Type.TString, Type.TNull]>>;
@@ -251,6 +263,7 @@ export declare const WorkerRuntimeStateSchema: Type.TObject<{
         contextRemainingTokens: Type.TOptional<Type.TNumber>;
     }>;
     error: Type.TOptional<Type.TString>;
+    worktreePath: Type.TOptional<Type.TString>;
 }>;
 export declare const TeamUiStateSchema: Type.TObject<{
     statusKey: Type.TString;
@@ -299,6 +312,12 @@ export declare const TeamConfigSchema: Type.TObject<{
         statusMessageType: Type.TString;
         storeTranscripts: Type.TBoolean;
     }>;
+    worktree: Type.TOptional<Type.TObject<{
+        enabled: Type.TBoolean;
+        basePath: Type.TString;
+        cleanupOnTerminal: Type.TBoolean;
+        cleanupOnPrune: Type.TBoolean;
+    }>>;
     profiles: Type.TArray<Type.TObject<{
         name: Type.TString;
         description: Type.TString;
@@ -388,6 +407,7 @@ export declare const PersistedTeamStateSchema: Type.TObject<{
             contextRemainingTokens: Type.TOptional<Type.TNumber>;
         }>;
         error: Type.TOptional<Type.TString>;
+        worktreePath: Type.TOptional<Type.TString>;
     }>>;
     prunedWorkerUsageTotals: Type.TObject<{
         workers: Type.TNumber;
