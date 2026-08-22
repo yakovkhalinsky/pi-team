@@ -5,6 +5,7 @@ import { aggregateWorkerUsage, hasWorkerUsage } from "../usage.js";
 import { formatRetainedTranscript } from "./transcript-retention.js";
 import { formatCacheUsage, formatCompactTokenCount, formatContextBudget } from "./usage-format.js";
 import { formatProfileLabel, formatWorkerStatusLabel, getWorkerAttentionDisplay, getWorkerAttentionPriority, getWorkerPrimaryAction } from "./display-grammar.js";
+import { aggregateEdenMemoryStatus, getMemoryStatusGlyph } from "../memory/memory-status.js";
 import { FRAME, stripAnsi, sanitizeTerminalText, themedPalette, fallbackPalette } from "./theme.js";
 
 // The overlay is a single-instance custom component. Styling helpers delegate
@@ -179,6 +180,8 @@ function compactActivityLine(event) {
         return `• Ran ${command ?? summary ?? label.replace(/^Ran\s+/, "")}`;
     if (event.actionKind === "tool")
         return `• ${label.startsWith("Used ") ? label : `Used ${toolName ?? label}`}`;
+    if (event.actionKind === "memory")
+        return `• Memory ${event.markerName ?? label}`;
     if (event.actionKind === "process" && summary)
         return `• ${label}: ${summary}`;
     if (event.actionKind === "final_summary")
@@ -309,6 +312,23 @@ export function buildInspectText(worker, transcript, consoleEvents, activityEven
         taskBody.push("(none)");
     }
     pushInspectBlock(lines, "Task", taskBody, palette);
+    const memoryBody = [];
+    if (worker.edenMemoryStatus?.enabled) {
+        memoryBody.push(`${palette.dim("Enabled:")} yes`);
+        if (worker.edenMemoryStatus.lastMarkerName)
+            memoryBody.push(`${palette.dim("Last marker:")} ${worker.edenMemoryStatus.lastMarkerName}`);
+        memoryBody.push(`${palette.dim("Records:")} ${worker.edenMemoryStatus.recordCount ?? 0}`);
+        if (worker.edenMemoryStatus.goalMemoryIds && worker.edenMemoryStatus.goalMemoryIds.length > 0)
+            memoryBody.push(`${palette.dim("Goal memories:")} ${worker.edenMemoryStatus.goalMemoryIds.length}`);
+        if (worker.edenMemoryStatus.taskMemoryIds && worker.edenMemoryStatus.taskMemoryIds.length > 0)
+            memoryBody.push(`${palette.dim("Task memories:")} ${worker.edenMemoryStatus.taskMemoryIds.length}`);
+        if (worker.edenMemoryStatus.lastError)
+            memoryBody.push(`${palette.dim("Last error:")} ${palette.danger(worker.edenMemoryStatus.lastError)}`);
+    }
+    else {
+        memoryBody.push("eden-memory disabled");
+    }
+    pushInspectBlock(lines, "Memory", memoryBody, palette);
     const operatorBody = [];
     if (worker.pendingRelayQuestions.length === 0) {
         operatorBody.push("(none)");
@@ -373,10 +393,20 @@ export function buildCostLines(state) {
     for (const worker of workers) {
         rows.push(`  ${worker.workerId.padEnd(6)} ${worker.profileName.padEnd(12)} turns=${worker.usage.turns}  in=${formatCompactTokenCount(worker.usage.inputTokens)}  out=${formatCompactTokenCount(worker.usage.outputTokens)}${formatCachePart(worker.usage)}  cost=$${worker.usage.costUsd.toFixed(4)}`);
     }
+    const memory = aggregateEdenMemoryStatus(state.edenMemoryStatus, workers);
+    const memoryRows = [];
+    if (memory) {
+        const glyph = getMemoryStatusGlyph(memory);
+        const parts = [`records=${memory.recordCount}`, `failed=${memory.recordsFailed}`, `skipped=${memory.recordsSkipped}`];
+        if (memory.lastError) parts.push(`err=${memory.lastError}`);
+        memoryRows.push("");
+        memoryRows.push(`${glyph} eden-memory: ${parts.join(" · ")}`);
+    }
     return [
         `Σ workers=${total.workers}  turns=${total.turns}  in=${formatCompactTokenCount(total.inputTokens)}  out=${formatCompactTokenCount(total.outputTokens)}${formatCachePart(total)}  cost=$${total.costUsd.toFixed(4)}`,
         "",
         ...(rows.length > 0 ? rows : ["(no tracked workers)"]),
+        ...memoryRows,
     ];
 }
 function getAttentionOrderedWorkerIds(state) {

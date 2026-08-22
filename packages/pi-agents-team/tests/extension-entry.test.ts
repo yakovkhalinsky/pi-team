@@ -24,7 +24,7 @@ function createMockPi() {
   };
 }
 
-function createMockContext() {
+function createMockContext(overrides = {}) {
   return {
     cwd: process.cwd(),
     hasUI: false,
@@ -34,6 +34,7 @@ function createMockContext() {
       isPersisted: () => false,
     },
     isProjectTrusted: () => false,
+    ...overrides,
   };
 }
 

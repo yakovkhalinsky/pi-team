@@ -4,6 +4,7 @@ import {
   resolveEdenOptions,
   getMissingRequiredEdenOptions,
 } from "./eden-memory.js";
+import { recordEdenMemoryMarker } from "./memory-status.js";
 
 /**
  * ATP lifecycle stages, mirroring `.pi-team/reference/task-lifecycle.md` and
@@ -106,16 +107,35 @@ async function writeStageMarker(stage, content, options = {}, ctx = {}) {
   const edenOptions = options.edenOptions ?? resolveEdenOptions(options.env);
   const missing = getMissingRequiredEdenOptions(edenOptions);
   if (missing.length > 0) {
+    const error = `Missing required eden-memory env fields: ${missing.join(", ")}`;
+    if (options.edenMemoryStatus) {
+      recordEdenMemoryMarker(options.edenMemoryStatus, {
+        markerName: ATP_MARKER_NAMES[stage],
+        ok: false,
+        error,
+        skipped: true,
+      });
+    }
     return {
       ok: false,
       stage,
       marker: ATP_MARKER_NAMES[stage],
-      error: `Missing required eden-memory env fields: ${missing.join(", ")}`,
+      error,
       skipped: true,
     };
   }
   const record = buildRecord(stage, content, ctx);
   const result = await rememberRecord(record, edenOptions, options.signal);
+  if (options.edenMemoryStatus) {
+    recordEdenMemoryMarker(options.edenMemoryStatus, {
+      markerName: ATP_MARKER_NAMES[stage],
+      ok: result.ok,
+      error: result.error,
+      memoryId: result.id,
+      goalId: record.metadata?.goalId,
+      taskId: record.metadata?.taskId,
+    });
+  }
   return {
     ok: result.ok,
     stage,

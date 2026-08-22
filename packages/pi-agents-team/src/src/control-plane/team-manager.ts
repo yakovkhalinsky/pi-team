@@ -9,6 +9,7 @@ import { applyLaunchPolicy } from "../safety/launch-policy.js";
 import { isPathWithinProjectRoot } from "../safety/path-scope.js";
 import { WorktreeManager } from "../worktree/worktree-manager.js";
 import { aggregateWorkerUsage } from "../usage.js";
+import { ensureWorkerEdenMemoryStatus } from "../memory/memory-status.js";
 const TERMINAL_STATUSES = new Set([
     "idle",
     "completed",
@@ -155,6 +156,10 @@ export class TeamManager {
     restore(state) {
         this.registry.restore(state);
         for (const worker of this.registry.listWorkers()) {
+            ensureWorkerEdenMemoryStatus(worker, this.config);
+            this.registry.upsertWorker(worker);
+        }
+        for (const worker of this.registry.listWorkers()) {
             const match = /^w(\d+)$/.exec(worker.workerId);
             if (match)
                 this.workerCounter = Math.max(this.workerCounter, Number(match[1]));
@@ -253,6 +258,7 @@ export class TeamManager {
         }
         if (worktreePath)
             worker.state.worktreePath = worktreePath;
+        ensureWorkerEdenMemoryStatus(worker.state, this.config);
         this.registry.upsertWorker(worker.state);
         try {
             signal?.throwIfAborted();
@@ -592,6 +598,7 @@ export class TeamManager {
         const preparedWorker = this.workerManager.prepareWorkerReuse(resolvedId, task);
         if (worktreePath && !preparedWorker.state.worktreePath)
             preparedWorker.state.worktreePath = worktreePath;
+        ensureWorkerEdenMemoryStatus(preparedWorker.state, this.config);
         this.registry.upsertWorker(preparedWorker.state);
         try {
             signal?.throwIfAborted();

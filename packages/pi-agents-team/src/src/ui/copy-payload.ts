@@ -25,6 +25,13 @@ export function formatActivityEvent(event) {
     const label = sanitizeTerminalText(event.label);
     const commandText = sanitizeTerminalText(event.command ?? event.summary ?? label.replace(/^Ran\s+/, ""));
     const toolName = event.toolName ? sanitizeTerminalText(event.toolName) : undefined;
+    if (event.actionKind === "memory") {
+        const outcome = event.ok ? "ok" : "error";
+        const lines = [`• Memory ${event.markerName ?? label} ${outcome}`];
+        if (event.summary && !event.ok)
+            lines.push(`  ${sanitizeTerminalText(event.summary)}`);
+        return lines;
+    }
     const bulletLabel = event.actionKind === "command"
         ? `• Ran ${commandText.replace(/^Ran\s+/, "")}`
         : event.actionKind === "tool"
@@ -104,6 +111,20 @@ export function synthesizeActivity(worker, consoleEvents) {
             summary: sanitizeTerminalText(worker.finalAnswer).replace(/\s+/g, " ").trim(),
             sourceEvent: "worker_text_flush",
             finalSummaryFields: fields,
+        });
+    }
+    for (const event of worker.edenMemoryStatus?.eventHistory ?? []) {
+        activity.push({
+            id: `copy:memory:${id++}`,
+            ts: event.ts,
+            updatedAt: event.ts,
+            actionKind: "memory",
+            status: event.ok ? "completed" : "error",
+            label: `Memory ${event.markerName}`,
+            summary: event.error,
+            sourceEvent: "eden_memory",
+            markerName: event.markerName,
+            ok: event.ok,
         });
     }
     return activity.sort((a, b) => a.ts - b.ts || a.updatedAt - b.updatedAt);

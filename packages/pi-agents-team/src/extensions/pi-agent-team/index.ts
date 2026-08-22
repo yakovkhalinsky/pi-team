@@ -23,7 +23,8 @@ import {
   recordWorkerRelay,
   recordWorkerTerminal,
 } from "../../src/memory/atp-recorder.js";
-import { getMissingRequiredEdenOptions, resolveEdenOptions } from "../../src/memory/eden-memory.js";
+import { createMemoryStatusTracker, ensureWorkerEdenMemoryStatus, formatMemoryStatusFragment, getMemoryStatusGlyph } from "../../src/memory/memory-status.js";
+import { getMissingRequiredEdenOptions, health, resolveEdenOptions } from "../../src/memory/eden-memory.js";
 import { registerTeamAutocomplete } from "../../src/ui/autocomplete.js";
 import { buildTeamStatusLine, buildTeamWidgetLines, getTeamStatusTip, hasAnimatedWorkers } from "../../src/ui/status-widget.js";
 import { createZeroWorkerUsageAggregate } from "../../src/usage.js";
@@ -168,7 +169,7 @@ function buildAtpContext(activeProjectConfig, ctx, extra = {}) {
         ...extra,
     };
 }
-function buildAtpRecorderOptions(activeProjectConfig, signal) {
+function buildAtpRecorderOptions(activeProjectConfig, signal, edenMemoryStatus) {
     const memoryEnabled = activeProjectConfig?.config?.memory?.edenMemory?.enabled === true;
     if (!memoryEnabled)
         return undefined;
@@ -180,6 +181,7 @@ function buildAtpRecorderOptions(activeProjectConfig, signal) {
         env: process.env,
         signal,
         edenOptions,
+        edenMemoryStatus,
     };
 }
 function buildEdenMemoryOptions(activeProjectConfig) {
@@ -200,11 +202,15 @@ function buildEdenMemoryOptions(activeProjectConfig) {
         ...(typeof memoryConfig?.semanticSearch === "boolean" ? { semanticSearch: memoryConfig.semanticSearch } : {}),
     };
 }
-function recordAtpStage(activeProjectConfig, stageRecorder, content, ctx, signal) {
-    const options = buildAtpRecorderOptions(activeProjectConfig, signal);
+function recordAtpStage(activeProjectConfig, stageRecorder, content, ctx, signal, edenMemoryStatus) {
+    const options = buildAtpRecorderOptions(activeProjectConfig, signal, edenMemoryStatus);
     if (!options)
         return;
     void stageRecorder(content, options, buildAtpContext(activeProjectConfig, ctx));
+}
+function getWorkerMemoryStatus(worker, activeProjectConfig) {
+    ensureWorkerEdenMemoryStatus(worker, activeProjectConfig?.config);
+    return worker.edenMemoryStatus;
 }
 function updateDelegateTaskProfileDescription(config) {
     const profileListSnapshot = config.profiles.map((profile) => profile.name);
@@ -479,6 +485,7 @@ export const _testing = {
     thinkingLevelWarningToastKey,
     buildAtpRecorderOptions,
     buildEdenMemoryOptions,
+    recordAtpStage,
 };
 export default function (pi) {
     let activeProjectConfig = loadActiveTeamConfig({
@@ -541,6 +548,7 @@ export default function (pi) {
     const dashboardState = new InlineDashboardState();
     let dashboardWidget;
     let detachDashboardInput;
+    let memoryTracker;
 
     function getOrCreateDashboardWidget(ctx) {
         if (!dashboardWidget) {
@@ -590,6 +598,42 @@ export default function (pi) {
         ctx.ui.setWidget(config.ui.widgetKey, undefined);
         clearDashboardUi(ctx, config);
     }
+    function refreshMemoryStatusOnState() {
+        if (memoryTracker)
+            teamState.edenMemoryStatus = memoryTracker.status;
+    }
+    function emitMemoryNotification() {
+        if (!activeContext?.hasUI || !memoryTracker)
+            return;
+        const message = memoryTracker.consumeNotification();
+        if (message)
+            activeContext.ui.notify(message, "warning");
+    }
+    function createMemoryTracker() {
+        if (memoryTracker) {
+            memoryTracker.stopPolling();
+            memoryTracker = undefined;
+        }
+        const memoryEnabled = activeProjectConfig.config.memory?.edenMemory?.enabled === true;
+        if (!memoryEnabled)
+            return;
+        const edenOptions = buildEdenMemoryOptions(activeProjectConfig);
+        if (!edenOptions.enabled)
+            return;
+        memoryTracker = createMemoryStatusTracker({
+            enabled: true,
+            health,
+            edenOptions,
+            healthIntervalMs: 30_000,
+        });
+        memoryTracker.startPolling();
+    }
+    function disposeMemoryTracker() {
+        if (memoryTracker) {
+            memoryTracker.stopPolling();
+            memoryTracker = undefined;
+        }
+    }
     function renderDashboardWidget(ctx) {
         if (!ctx?.hasUI || ctx.mode !== "tui" || !dashboardState.active)
             return;
@@ -608,6 +652,8 @@ export default function (pi) {
     const SPINNER_INTERVAL_MS = 120;
     const TIP_INTERVAL_MS = 15_000;
     function renderUi(ctx, state, frame = spinnerFrame, config = activeProjectConfig.config, active = isTeamActive(activeProjectConfig), routingMode = teamManager.routingMode, displayCost = activeProjectConfig.displayCost) {
+        refreshMemoryStatusOnState();
+        emitMemoryNotification();
         applyUi(ctx, state, frame, config, active, routingMode, displayCost, getTeamStatusTip(tipIndex), orchestratorWorking);
         renderDashboardWidget(ctx);
         if (ctx?.hasUI && active)
@@ -929,6 +975,7 @@ export default function (pi) {
                 stopSpinner();
             }
             for (const worker of Object.values(state.activeWorkers)) {
+                const workerMemoryStatus = getWorkerMemoryStatus(worker, activeProjectConfig);
                 const previous = lastStatus.get(worker.workerId);
                 const nowTerminal = isTerminalWorkerStatus(worker.status);
                 const wasTerminal = previous ? isTerminalWorkerStatus(previous) : false;
@@ -953,9 +1000,9 @@ export default function (pi) {
                     const atpCtx = {
                         ...buildAtpContext(activeProjectConfig, activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, worktreePath: worker.worktreePath }),
                     };
-                    void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(activeProjectConfig), atpCtx);
+                    void recordWorkerTerminal(worker.workerId, worker.status, worker.lastSummary?.headline ?? worker.currentTask?.title ?? "", buildAtpRecorderOptions(activeProjectConfig, undefined, workerMemoryStatus), atpCtx);
                     if (worker.finalAnswer?.trim()) {
-                        void recordTerminalStageForProfile(worker.profileName, worker.finalAnswer.trim(), buildAtpRecorderOptions(activeProjectConfig), atpCtx);
+                        void recordTerminalStageForProfile(worker.profileName, worker.finalAnswer.trim(), buildAtpRecorderOptions(activeProjectConfig, undefined, workerMemoryStatus), atpCtx);
                     }
                 }
                 lastStatus.set(worker.workerId, worker.status);
@@ -971,7 +1018,7 @@ export default function (pi) {
                 if (currRelays > prevRelays) {
                     const newest = worker.pendingRelayQuestions[worker.pendingRelayQuestions.length - 1];
                     if (newest?.question) {
-                        void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(activeProjectConfig), {
+                        void recordWorkerRelay(worker.workerId, newest.question, newest.assumption, buildAtpRecorderOptions(activeProjectConfig, undefined, workerMemoryStatus), {
                             ...buildAtpContext(activeProjectConfig, activeContext, { taskId: worker.currentTask?.taskId, profileName: worker.profileName, goalId: worker.currentTask?.title, relayUrgency: newest.urgency, worktreePath: worker.worktreePath }),
                         });
                     }
@@ -986,7 +1033,7 @@ export default function (pi) {
                 || pruned.costUsd !== lastPrunedUsageTotals.costUsd;
             if (changed) {
                 Object.assign(lastPrunedUsageTotals, pruned);
-                void recordWorkerPrune(pruned.workers, pruned, buildAtpRecorderOptions(activeProjectConfig), buildAtpContext(activeProjectConfig, activeContext));
+                void recordWorkerPrune(pruned.workers, pruned, buildAtpRecorderOptions(activeProjectConfig, undefined, teamState.edenMemoryStatus), buildAtpContext(activeProjectConfig, activeContext));
             }
         });
         const workerEvents = manager.workerManager;
@@ -1118,7 +1165,7 @@ export default function (pi) {
                 projectTrustRoot: projectTrusted === undefined ? undefined : activeProjectConfig.projectRoot ?? ctx.cwd,
                 reuseWorkerId: params.reuseWorkerId ?? undefined,
             }, signal);
-            recordAtpStage(activeProjectConfig, recordRouting, `Routed to ${params.profileName}: ${params.title}`, ctx, signal);
+            recordAtpStage(activeProjectConfig, recordRouting, `Routed to ${params.profileName}: ${params.title}`, ctx, signal, memoryTracker);
             teamState = teamManager.snapshot();
             renderUi(activeContext, teamState, spinnerFrame, activeProjectConfig.config, isTeamActive(activeProjectConfig), teamManager.routingMode, activeProjectConfig.displayCost);
             return {
@@ -1328,11 +1375,12 @@ export default function (pi) {
                     }
                 }
             }
+            createMemoryTracker();
             if (event.reason !== "startup" && markedCount > 0 && isTeamActive(activeProjectConfig)) {
                 const noun = markedCount === 1 ? "worker" : "workers";
                 ctx.ui.notify(`Workers exited — ${markedCount} ${noun} restored from ${event.reason}; relaunch if needed.`, "warning");
             }
-            recordAtpStage(activeProjectConfig, recordGoalReceipt, `Session started (${event.reason})`, ctx);
+            recordAtpStage(activeProjectConfig, recordGoalReceipt, `Session started (${event.reason})`, ctx, undefined, memoryTracker);
         }
         finally {
             reloading = false;
@@ -1391,6 +1439,7 @@ export default function (pi) {
         reloading = true;
         try {
             await replaceTeamManager(activeProjectConfig.config);
+            createMemoryTracker();
             const { state, persistenceMeasurement } = restoreLatestState(ctx, "reload", activeProjectConfig.config);
             teamState = state;
             persistenceGrowth.replace(persistenceMeasurement, isPersistedSession(ctx));
@@ -1463,8 +1512,9 @@ export default function (pi) {
             flushPendingPersistence();
             detachTeamManagerListener(false);
             clearUi(ctx, activeProjectConfig.config);
+            disposeMemoryTracker();
             orchestratorWorking = false;
-            recordAtpStage(activeProjectConfig, recordHandOffOrClosure, `Session shutting down`, ctx);
+            recordAtpStage(activeProjectConfig, recordHandOffOrClosure, `Session shutting down`, ctx, undefined, memoryTracker);
             activeContext = undefined;
         }
     });

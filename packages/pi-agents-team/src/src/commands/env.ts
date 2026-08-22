@@ -265,8 +265,23 @@ export function registerTeamEnvCommand(pi) {
         const entries = readEnvFile(envPath);
         const missing = getMissingRequiredEnvFields(entries);
         const lines = [existsSync(envPath) ? `Project .env found at ${envPath}.` : `No project .env at ${envPath}.`, formatMissingFieldsReport(missing)];
+        let healthFailed = false;
+        if (missing.length === 0) {
+          const options = resolveEdenOptions(entries);
+          const healthResult = await health(options);
+          if (healthResult.ok && !healthResult.locked) {
+            lines.push("eden-memory health check passed.");
+          } else if (healthResult.locked) {
+            healthFailed = true;
+            lines.push(`Warning: ${options.db} is locked by another eden-memory process.`);
+          } else {
+            healthFailed = true;
+            lines.push(`Warning: eden-memory health check failed: ${healthResult.error}`);
+          }
+        }
         const text = lines.join("\n");
-        if (ctx.ui) ctx.ui.notify(text, missing.length > 0 ? "warning" : "info");
+        const level = missing.length > 0 || healthFailed ? "warning" : "info";
+        if (ctx.ui) ctx.ui.notify(text, level);
         else console.log(text);
         return;
       }

@@ -276,6 +276,32 @@ export interface WorkerRuntimeState {
     usage: WorkerUsageStats;
     error?: string;
     worktreePath?: string;
+    edenMemoryStatus?: EdenMemoryStatus;
+}
+export interface EdenMemoryEvent {
+    markerName: string;
+    ok: boolean;
+    error?: string;
+    memoryId?: string;
+    ts: number;
+}
+
+export interface EdenMemoryStatus {
+    enabled: boolean;
+    healthy: boolean | undefined;
+    locked: boolean;
+    recordsWritten: number;
+    recordsFailed: number;
+    lastError: string | undefined;
+    lastHealthCheckAt: number | undefined;
+    lastWriteAt: number | undefined;
+    /** Phase 2: per-worker ATP lifecycle tracking. */
+    goalMemoryIds?: string[];
+    taskMemoryIds?: string[];
+    recordCount?: number;
+    lastMarkerName?: string;
+    lastResult?: "ok" | "error";
+    eventHistory?: EdenMemoryEvent[];
 }
 export interface TeamWorktreeConfig {
     enabled: boolean;
@@ -376,5 +402,6 @@ export interface PersistedTeamState {
     taskRegistry: Record<string, DelegatedTaskInput>;
     relayQueue: RelayQuestion[];
     ui: TeamUiState;
+    edenMemoryStatus?: EdenMemoryStatus;
     updatedAt: number;
 }

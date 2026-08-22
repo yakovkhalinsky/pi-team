@@ -1,10 +1,10 @@
 {
   "schemaVersion": 4,
-  "scaffoldVersion": 4,
+  "scaffoldVersion": 5,
   "enabled": true,
   "routingMode": "team",
   "workerAccess": {
-    "allowPathsOutsideProject": true
+    "allowPathsOutsideProject": false
   },
   "display": {
     "cost": true
@@ -85,7 +85,7 @@
       "prompt": "default"
     },
     "researcher": {
-      "whenToUse": "Reduce uncertainty. I gather context, surface alternatives with trade-offs, and land findings the team can act on.",
+      "whenToUse": "Reduce uncertainty. I gather context from the codebase, external sources, and live system signals; surface alternatives with trade-offs; and land findings the team can act on.",
       "model": "default",
       "thinkingLevel": "medium",
       "access": {
@@ -94,7 +94,9 @@
           "grep",
           "find",
           "ls",
-          "bash"
+          "bash",
+          "web_search",
+          "web_fetch"
         ],
         "write": false
       },

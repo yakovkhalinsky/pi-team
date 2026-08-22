@@ -32,6 +32,30 @@ describe("ui/tool-formatters", () => {
       const result = { worker: { ...baseWorker, currentTask: { title: "Task" } }, warnings: ["slow model"] };
       assert.ok(formatDelegateTaskResult(result).includes("slow model"));
     });
+
+    it("shows a one-line memory status when present", () => {
+      const worker = {
+        ...baseWorker,
+        currentTask: { title: "Task" },
+        edenMemoryStatus: {
+          enabled: true,
+          healthy: true,
+          locked: false,
+          recordsWritten: 0,
+          recordsFailed: 0,
+          lastError: undefined,
+          lastHealthCheckAt: undefined,
+          lastWriteAt: undefined,
+          recordCount: 1,
+          lastMarkerName: "[action]",
+          lastResult: "ok",
+        },
+      };
+      const text = formatDelegateTaskResult({ worker, warnings: [] });
+      assert.ok(text.includes("Memory"));
+      assert.ok(text.includes("[action]"));
+      assert.ok(text.includes("records=1"));
+    });
   });
 
   describe("formatAgentMessageResult", () => {
@@ -78,6 +102,29 @@ describe("ui/tool-formatters", () => {
       assert.ok(text.includes("w1"));
       assert.ok(text.includes("not ready"));
     });
+
+    it("appends a memory status line when present", () => {
+      const worker = {
+        ...baseWorker,
+        edenMemoryStatus: {
+          enabled: true,
+          healthy: true,
+          locked: false,
+          recordsWritten: 0,
+          recordsFailed: 0,
+          lastError: undefined,
+          lastHealthCheckAt: undefined,
+          lastWriteAt: undefined,
+          recordCount: 3,
+          lastMarkerName: "[recorded]",
+          lastResult: "ok",
+        },
+      };
+      const text = formatAgentResultNotReady(worker);
+      assert.ok(text.includes("Memory"));
+      assert.ok(text.includes("[recorded]"));
+      assert.ok(text.includes("records=3"));
+    });
   });
 
   describe("formatWorkerCompact", () => {
@@ -91,6 +138,29 @@ describe("ui/tool-formatters", () => {
       const worker = { ...baseWorker, pendingRelayQuestions: [{ question: "Need input", assumption: "none", urgency: "medium" }] };
       const text = formatWorkerCompact(worker);
       assert.ok(text.includes("Need input"));
+    });
+
+    it("shows a one-line memory status when present", () => {
+      const worker = {
+        ...baseWorker,
+        edenMemoryStatus: {
+          enabled: true,
+          healthy: true,
+          locked: false,
+          recordsWritten: 0,
+          recordsFailed: 0,
+          lastError: undefined,
+          lastHealthCheckAt: undefined,
+          lastWriteAt: undefined,
+          recordCount: 2,
+          lastMarkerName: "[action]",
+          lastResult: "ok",
+        },
+      };
+      const text = formatWorkerCompact(worker);
+      assert.ok(text.includes("Memory"));
+      assert.ok(text.includes("[action]"));
+      assert.ok(text.includes("records=2"));
     });
   });
 

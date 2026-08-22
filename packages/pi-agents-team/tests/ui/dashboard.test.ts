@@ -38,6 +38,14 @@ describe("ui/dashboard", () => {
       assert.ok(line.includes("mode orchestrator"));
       assert.ok(line.includes("relays 1"));
     });
+
+    it("includes memory status when enabled", () => {
+      const state = makeTeamState([]);
+      state.edenMemoryStatus = { enabled: true, healthy: true, locked: false, recordsWritten: 2, recordsFailed: 0 };
+      const line = buildCompactTeamSummaryLine(state);
+      assert.ok(line.includes("✓"));
+      assert.ok(line.includes("ok"));
+    });
   });
 
   describe("buildTeamDashboardLines", () => {
@@ -56,6 +64,17 @@ describe("ui/dashboard", () => {
       assert.ok(text.includes("Working"));
       assert.ok(text.includes("w1"));
       assert.ok(text.includes("Implement feature"));
+    });
+
+    it("renders memory status line when enabled", () => {
+      const state = makeTeamState([]);
+      state.edenMemoryStatus = { enabled: true, healthy: false, locked: true, recordsWritten: 0, recordsFailed: 1, lastError: "locked" };
+      const lines = buildTeamDashboardLines(state, { displayCost: false });
+      const text = lines.join("\n");
+      assert.ok(text.includes("Memory"));
+      assert.ok(text.includes("🔒"));
+      assert.ok(text.includes("written=0"));
+      assert.ok(text.includes("failed=1"));
     });
   });
 

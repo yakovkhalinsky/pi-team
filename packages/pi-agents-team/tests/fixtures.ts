@@ -30,6 +30,7 @@ export function makeWorker(options: Partial<WorkerRuntimeState> & { workerId: st
       contextPercent: options.usage?.contextPercent,
       contextRemainingTokens: options.usage?.contextRemainingTokens,
     },
+    edenMemoryStatus: options.edenMemoryStatus,
     error: options.error,
   };
 }

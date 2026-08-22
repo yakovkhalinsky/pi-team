@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { compareWorkerIds } from "../types.js";
 import { aggregateWorkerUsage, hasWorkerUsage } from "../usage.js";
+import { formatMemoryStatusFragment, getMemoryStatusGlyph } from "../memory/memory-status.js";
 import { formatProfileLabel, formatWorkerDisplayId, formatWorkerStatusLabel, getWorkerAttentionDisplay, getWorkerAttentionPriority, getWorkerStatusGlyph } from "./display-grammar.js";
 import { bold as legacyBold, themedPalette } from "./theme.js";
 import { formatCacheUsage, formatCacheUsageWithHit, formatCompactTokenCount } from "./usage-format.js";
@@ -48,18 +49,25 @@ export function buildTeamStatusLine(state, routingMode = "team", tip, orchestrat
     const working = orchestratorWorking || hasActiveOrchestratorWork(state);
     const activityPlain = working ? "Working" : "Idle";
     const glyph = working ? "▶" : "○";
+    const memoryStatus = state.edenMemoryStatus;
+    const memoryGlyph = getMemoryStatusGlyph(memoryStatus);
+    const memoryFragment = formatMemoryStatusFragment(memoryStatus);
     if (tier === "glyph") {
         const modeGlyph = routingMode === "solo" ? "S" : "T";
-        return truncateToWidth(`${modeGlyph}${glyph}`, width);
+        const memoryPart = memoryGlyph ? `·${memoryGlyph}` : "";
+        return truncateToWidth(`${modeGlyph}${glyph}${memoryPart}`, width);
     }
     const modeLabel = routingMode === "solo" ? "Solo" : "Team";
-    const compactStatus = `${modeLabel} · ${activityPlain}`;
+    const compactStatus = memoryFragment ? `${modeLabel} · ${activityPlain} · ${memoryFragment}` : `${modeLabel} · ${activityPlain}`;
     if (tier === "compact" || !theme)
         return truncateToWidth(tip && tier === "full" ? `${compactStatus} · Tip: ${tip}` : compactStatus, width);
     const palette = themedPalette(theme);
     const activity = working ? palette.warning("Working...") : palette.success("Idle");
     const themedStatus = routingMode === "solo" ? `Orchestrator · Solo · ${activity}` : `Orchestrator · ${activity}`;
-    const line = tip ? `${themedStatus} · ${palette.dim("Tip:")} ${tip}` : themedStatus;
+    const themedMemory = memoryFragment ? palette.dim(memoryFragment) : "";
+    const line = tip
+        ? `${themedStatus} · ${palette.dim("Tip:")} ${tip}${themedMemory ? ` · ${themedMemory}` : ""}`
+        : `${themedStatus}${themedMemory ? ` · ${themedMemory}` : ""}`;
     return truncateToWidth(line, width);
 }
 function hasActiveOrchestratorWork(state) {
@@ -319,6 +327,15 @@ export function buildTeamWidgetLines(state, options = {}) {
             ? `${palette.accent("Team")} ${palette.dim("·")} a=${palette.bold(String(activeCount))} ${palette.dim("·")} r=${palette.bold(String(state.relayQueue.length))}`
             : `${palette.accent("Pi Agents Team")} ${palette.dim("·")} active=${palette.bold(String(activeCount))} ${palette.dim("·")} relays=${palette.bold(String(state.relayQueue.length))}`;
     const lines = [truncateToWidth(header, width), status.row];
+    const memoryFragment = formatMemoryStatusFragment(state.edenMemoryStatus);
+    if (memoryFragment) {
+        const memoryLine = tier === "glyph"
+            ? `${palette.dim("M")}${getMemoryStatusGlyph(state.edenMemoryStatus)}`
+            : tier === "compact"
+                ? `${palette.dim("Memory")} ${palette.dim("·")} ${formatMemoryStatusFragment(state.edenMemoryStatus)}`
+                : `${palette.dim("└ Memory")} ${palette.dim("·")} ${formatMemoryStatusFragment(state.edenMemoryStatus)}`;
+        lines.push(truncateToWidth(memoryLine, width, "…"));
+    }
     if (displayCost && !status.includesUsage && tier === "full") {
         const usageLine = buildUsageLine(state, palette, width);
         if (usageLine)

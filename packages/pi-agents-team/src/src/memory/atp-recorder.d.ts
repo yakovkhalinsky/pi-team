@@ -1,4 +1,5 @@
 import { EdenMemoryOptions, EdenRememberRecord } from "./eden-memory.js";
+import type { EdenMemoryStatus } from "./memory-status.js";
 
 export type AtpStage =
   | "goal-receipt"
@@ -17,6 +18,7 @@ export interface AtpRecorderOptions {
   env?: Record<string, string | undefined>;
   edenOptions?: EdenMemoryOptions;
   signal?: AbortSignal;
+  edenMemoryStatus?: EdenMemoryStatus;
 }
 
 export interface AtpRecordContext {

@@ -42,7 +42,7 @@ export interface WorkerConsoleEvent {
     kind: "status" | "tool_start" | "tool_end" | "assistant_text" | "assistant_message" | "queue" | "error" | "exit";
     text: string;
 }
-export type WorkerActivityKind = "status" | "command" | "tool" | "process" | "final_summary" | "queue" | "error" | "exit";
+export type WorkerActivityKind = "status" | "command" | "tool" | "process" | "final_summary" | "queue" | "error" | "exit" | "memory";
 export type WorkerActivityStatus = "started" | "completed" | "error" | "info";
 export interface WorkerActivityEvent {
     id: string;
@@ -56,7 +56,7 @@ export interface WorkerActivityEvent {
     command?: string;
     outputSnippet?: string;
     hiddenLineCount?: number;
-    sourceEvent: NormalizedWorkerEvent["type"] | "worker_text_flush";
+    sourceEvent: NormalizedWorkerEvent["type"] | "worker_text_flush" | "eden_memory";
     toolCallId?: string;
     finalSummaryFields?: {
         headline?: string;

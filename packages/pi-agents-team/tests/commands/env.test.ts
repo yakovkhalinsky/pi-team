@@ -114,6 +114,49 @@ describe("/team-env command", () => {
     assert.equal(notification.level, "warning");
   });
 
+  it("runs health check and reports status in check mode when .env is complete", async () => {
+    const envPath = resolve(tmpDir, ".env");
+    const binPath = resolve(tmpDir, "eden-memory");
+    writeFileSync(
+      binPath,
+      "#!/bin/sh\nexit 0\n",
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      envPath,
+      `${EDEN_ENV_FIELDS.BIN}=${binPath}\n${EDEN_ENV_FIELDS.DB}=${resolve(tmpDir, "db.db")}\n${EDEN_ENV_FIELDS.WORKSPACE_ID}=ws\n${EDEN_ENV_FIELDS.USER_ID}=user\n${EDEN_ENV_FIELDS.AGENT_ID}=agent\n`,
+    );
+    const pi = createMockPi();
+    registerTeamEnvCommand(pi);
+    const ctx = createCtx(tmpDir);
+    await pi.commands.get("team-env")!.handler("--check", ctx);
+    const notification = ctx.ui.notifyCalls[0];
+    assert.ok(notification.message.includes("All required eden-memory env fields are present."));
+    assert.ok(notification.message.includes("eden-memory health check passed."));
+    assert.equal(notification.level, "info");
+  });
+
+  it("reports health failure in check mode when eden-memory binary is broken", async () => {
+    const envPath = resolve(tmpDir, ".env");
+    const binPath = resolve(tmpDir, "eden-memory");
+    writeFileSync(
+      binPath,
+      "#!/bin/sh\necho 'database locked by another eden-memory process' >&2\nexit 1\n",
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      envPath,
+      `${EDEN_ENV_FIELDS.BIN}=${binPath}\n${EDEN_ENV_FIELDS.DB}=${resolve(tmpDir, "db.db")}\n${EDEN_ENV_FIELDS.WORKSPACE_ID}=ws\n${EDEN_ENV_FIELDS.USER_ID}=user\n${EDEN_ENV_FIELDS.AGENT_ID}=agent\n`,
+    );
+    const pi = createMockPi();
+    registerTeamEnvCommand(pi);
+    const ctx = createCtx(tmpDir);
+    await pi.commands.get("team-env")!.handler("--check", ctx);
+    const notification = ctx.ui.notifyCalls[0];
+    assert.ok(notification.message.includes("locked by another eden-memory process"));
+    assert.equal(notification.level, "warning");
+  });
+
   it("creates a .env file with defaults when none exists", async () => {
     const pi = createMockPi();
     registerTeamEnvCommand(pi);
@@ -295,11 +338,17 @@ describe("/team-env command", () => {
 
   it("check mode reports a complete .env at info level", async () => {
     const envPath = resolve(tmpDir, ".env");
+    const binPath = resolve(tmpDir, "eden-memory");
+    writeFileSync(
+      binPath,
+      "#!/bin/sh\nexit 0\n",
+      { mode: 0o755 },
+    );
     writeFileSync(
       envPath,
       [
-        `${EDEN_ENV_FIELDS.BIN}=/fake-bin`,
-        `${EDEN_ENV_FIELDS.DB}=/db`,
+        `${EDEN_ENV_FIELDS.BIN}=${binPath}`,
+        `${EDEN_ENV_FIELDS.DB}=${resolve(tmpDir, "db.db")}`,
         `${EDEN_ENV_FIELDS.WORKSPACE_ID}=ws`,
         `${EDEN_ENV_FIELDS.USER_ID}=user`,
         `${EDEN_ENV_FIELDS.AGENT_ID}=agent`,

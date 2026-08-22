@@ -1,6 +1,7 @@
 import { truncateToWidth, visibleWidth as measureVisibleWidth } from "@earendil-works/pi-tui";
 import { formatProfileLabel, formatWorkerDisplayId, formatWorkerIdList, formatWorkerLabel, formatWorkerStatusLabel, formatWorkerToolLabel } from "./display-grammar.js";
 import { formatContextBudget } from "./usage-format.js";
+import { formatWorkerMemoryLine } from "../memory/memory-status.js";
 export const TOOL_SECTION_LABELS = {
     worker: "Worker",
     profile: "Profile",
@@ -180,6 +181,8 @@ export function formatDelegateTaskResult(result) {
     const title = task?.title ?? "delegated task";
     const taskLabel = task?.taskId ? `${title} (${task.taskId})` : title;
     const lines = [`${result.worker.workerId} · ${taskLabel}`];
+    const memoryLine = formatWorkerMemoryLine(result.worker.edenMemoryStatus);
+    if (memoryLine) lines.push(memoryLine);
     const warnings = result.warnings ?? [];
     if (warnings.length > 0)
         lines.push(formatScanSection({ label: TOOL_SECTION_LABELS.warning, items: warnings }) ?? "");
@@ -252,16 +255,21 @@ export function formatWaitForAgentsResult(result) {
     return lines.join("\n");
 }
 export function formatAgentResultNotReady(worker) {
-    return [
+    const lines = [
         formatWorkerResultTitle(worker),
         `${TOOL_SECTION_LABELS.status}: ${worker.status} (${formatWorkerStatusLabel(worker)})`,
         `${TOOL_SECTION_LABELS.finalAnswerNote}: ${FINAL_ANSWER_NOT_READY_MESSAGE}`,
-    ].join("\n");
+    ];
+    const memoryLine = formatWorkerMemoryLine(worker.edenMemoryStatus);
+    if (memoryLine) lines.push(memoryLine);
+    return lines.join("\n");
 }
 export function formatWorkerCompact(worker) {
     const lines = [];
     appendWorkerCompactHeader(lines, worker);
     appendRelayQuestions(lines, worker);
+    const memoryLine = formatWorkerMemoryLine(worker.edenMemoryStatus);
+    if (memoryLine) lines.push(memoryLine);
     appendWorkerSummary(lines, worker);
     appendFinalAnswer(lines, worker, { includeResultNotes: true });
     return lines.join("\n");

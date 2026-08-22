@@ -179,6 +179,18 @@ export declare const WorkerSummarySchema: Type.TObject<{
     relayQuestionCount: Type.TNumber;
     updatedAt: Type.TNumber;
 }>;
+export declare const EdenMemoryStatusSchema: Type.TObject<{
+    enabled: Type.TBoolean;
+    healthy: Type.TOptional<Type.TBoolean>;
+    locked: Type.TBoolean;
+    recordsWritten: Type.TNumber;
+    recordsFailed: Type.TNumber;
+    lastError: Type.TOptional<Type.TString>;
+    lastHealthCheckAt: Type.TOptional<Type.TNumber>;
+    lastWriteAt: Type.TOptional<Type.TNumber>;
+}, {
+    additionalProperties: false;
+}>;
 export declare const DelegatedTaskInputSchema: Type.TObject<{
     taskId: Type.TString;
     title: Type.TString;
@@ -264,6 +276,16 @@ export declare const WorkerRuntimeStateSchema: Type.TObject<{
     }>;
     error: Type.TOptional<Type.TString>;
     worktreePath: Type.TOptional<Type.TString>;
+    edenMemoryStatus: Type.TOptional<Type.TObject<{
+        enabled: Type.TBoolean;
+        healthy: Type.TOptional<Type.TBoolean>;
+        locked: Type.TBoolean;
+        recordsWritten: Type.TNumber;
+        recordsFailed: Type.TNumber;
+        lastError: Type.TOptional<Type.TString>;
+        lastHealthCheckAt: Type.TOptional<Type.TNumber>;
+        lastWriteAt: Type.TOptional<Type.TNumber>;
+    }>>;
 }>;
 export declare const TeamUiStateSchema: Type.TObject<{
     statusKey: Type.TString;
@@ -408,6 +430,16 @@ export declare const PersistedTeamStateSchema: Type.TObject<{
         }>;
         error: Type.TOptional<Type.TString>;
         worktreePath: Type.TOptional<Type.TString>;
+        edenMemoryStatus: Type.TOptional<Type.TObject<{
+            enabled: Type.TBoolean;
+            healthy: Type.TOptional<Type.TBoolean>;
+            locked: Type.TBoolean;
+            recordsWritten: Type.TNumber;
+            recordsFailed: Type.TNumber;
+            lastError: Type.TOptional<Type.TString>;
+            lastHealthCheckAt: Type.TOptional<Type.TNumber>;
+            lastWriteAt: Type.TOptional<Type.TNumber>;
+        }>>;
     }>>;
     prunedWorkerUsageTotals: Type.TObject<{
         workers: Type.TNumber;
@@ -453,6 +485,16 @@ export declare const PersistedTeamStateSchema: Type.TObject<{
         widgetKey: Type.TString;
         lastRenderAt: Type.TNumber;
     }>;
+    edenMemoryStatus: Type.TOptional<Type.TObject<{
+        enabled: Type.TBoolean;
+        healthy: Type.TOptional<Type.TBoolean>;
+        locked: Type.TBoolean;
+        recordsWritten: Type.TNumber;
+        recordsFailed: Type.TNumber;
+        lastError: Type.TOptional<Type.TString>;
+        lastHealthCheckAt: Type.TOptional<Type.TNumber>;
+        lastWriteAt: Type.TOptional<Type.TNumber>;
+    }>>;
     updatedAt: Type.TNumber;
 }>;
 export declare const DEFAULT_TEAM_CONFIG: TeamConfig;

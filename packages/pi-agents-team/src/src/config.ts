@@ -157,6 +157,17 @@ export const WorkerSummarySchema = Type.Object({
     relayQuestionCount: Type.Number({ default: 0 }),
     updatedAt: Type.Number(),
 });
+export const EdenMemoryStatusSchema = Type.Object({
+    enabled: Type.Boolean(),
+    healthy: Type.Optional(Type.Boolean()),
+    locked: Type.Boolean({ default: false }),
+    recordsWritten: Type.Number({ default: 0 }),
+    recordsFailed: Type.Number({ default: 0 }),
+    recordsSkipped: Type.Number({ default: 0 }),
+    lastError: Type.Optional(Type.String()),
+    lastHealthCheckAt: Type.Optional(Type.Number()),
+    lastWriteAt: Type.Optional(Type.Number()),
+}, { additionalProperties: false });
 export const DelegatedTaskInputSchema = Type.Object({
     taskId: Type.String(),
     title: Type.String(),
@@ -188,6 +199,7 @@ export const WorkerRuntimeStateSchema = Type.Object({
     usage: WorkerUsageStatsSchema,
     error: Type.Optional(Type.String()),
     worktreePath: Type.Optional(Type.String()),
+    edenMemoryStatus: Type.Optional(EdenMemoryStatusSchema),
 });
 export const TeamUiStateSchema = Type.Object({
     statusKey: Type.String(),
@@ -248,6 +260,7 @@ export const PersistedTeamStateSchema = Type.Object({
     taskRegistry: Type.Record(Type.String(), DelegatedTaskInputSchema),
     relayQueue: Type.Array(RelayQuestionSchema),
     ui: TeamUiStateSchema,
+    edenMemoryStatus: Type.Optional(EdenMemoryStatusSchema),
     updatedAt: Type.Number(),
 });
 export const DEFAULT_TEAM_CONFIG = {

@@ -1,5 +1,6 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { compareWorkerIds } from "../types.js";
+import { formatMemoryStatusFragment, getMemoryStatusGlyph } from "../memory/memory-status.js";
 import { WORKER_ATTENTION_ORDER, formatWorkerLabel, formatWorkerStatusLabel, getWorkerAttentionDisplay, getWorkerAttentionPriority as getSharedWorkerAttentionPriority, getWorkerPrimaryAction, } from "./display-grammar.js";
 import { themedPalette } from "./theme.js";
 import { formatCompactTokenCount } from "./usage-format.js";
@@ -50,7 +51,9 @@ export function buildCompactTeamSummaryLine(state, theme) {
     const workerCount = Object.keys(state.activeWorkers).length;
     const mode = palette ? palette.accent(String(state.sessionMode)) : state.sessionMode;
     const relays = palette ? palette.warning(String(state.relayQueue.length)) : state.relayQueue.length;
-    return `workers ${workerCount} · mode ${mode} · relays ${relays} · ${buildActionSummaryLine(state, theme)}`;
+    const memory = formatMemoryStatusFragment(state.edenMemoryStatus);
+    const base = `workers ${workerCount} · mode ${mode} · relays ${relays} · ${buildActionSummaryLine(state, theme)}`;
+    return memory ? `${base} · ${memory}` : base;
 }
 export function buildTeamDashboardLines(state, themeOrOptions, width = DEFAULT_DASHBOARD_WIDTH) {
     const options = themeOrOptions && ("displayCost" in themeOrOptions || "theme" in themeOrOptions || "width" in themeOrOptions)
@@ -65,11 +68,21 @@ export function buildTeamDashboardLines(state, themeOrOptions, width = DEFAULT_D
     const lines = [
         truncateToWidth(palette ? palette.accentBold("Pi Agents Team Dashboard") : "Pi Agents Team Dashboard", resolvedWidth),
         truncateToWidth(buildCompactTeamSummaryLine(state, theme), resolvedWidth),
+    ];
+    const memoryStatus = state.edenMemoryStatus;
+    if (memoryStatus?.enabled) {
+        const memoryGlyph = getMemoryStatusGlyph(memoryStatus);
+        const memoryLine = palette
+            ? `${palette.dim("Memory")} ${memoryGlyph} ${palette.dim(`written=${memoryStatus.recordsWritten} failed=${memoryStatus.recordsFailed}${memoryStatus.lastError ? ` lastErr=${memoryStatus.lastError.slice(0, 40)}` : ""}`)}`
+            : `Memory ${memoryGlyph} written=${memoryStatus.recordsWritten} failed=${memoryStatus.recordsFailed}${memoryStatus.lastError ? ` lastErr=${memoryStatus.lastError.slice(0, 40)}` : ""}`;
+        lines.push(truncateToWidth(memoryLine, resolvedWidth, "…"));
+    }
+    lines.push(
         truncateToWidth("/team opens a keyboard-first overlay with the complete worker registry grouped by attention.", resolvedWidth),
         truncateToWidth(`Use /team <worker-id> for direct focus, then inspect ${tabSummary} tabs. Print mode stays summary-only.`, resolvedWidth),
         truncateToWidth("Use /team-result <id> for the final deliverable block.", resolvedWidth),
         "",
-    ];
+    );
     if (workers.length === 0) {
         lines.push(truncateToWidth(palette ? palette.dim("No tracked workers.") : "No tracked workers.", resolvedWidth));
         return lines;
