@@ -63,6 +63,45 @@ function createMockChild(stdout: string, stderr: string, exitCode: number) {
   return child;
 }
 
+
+function createHangingChild() {
+  const child = new EventEmitter() as any;
+  child.pid = 12345;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.kill = (signal?: string) => {
+    setImmediate(() => child.emit("close", null, signal ?? "SIGTERM"));
+    return true;
+  };
+  return child;
+}
+
+async function waitForController(workerId: string) {
+  for (let i = 0; i < 100; i++) {
+    const record = _testing.getWorkerMap().get(workerId);
+    if (record?.controller?.child) return record;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Controller was not attached to worker record");
+}
+
+
+function createRelayChild() {
+  const relayEvent = {
+    type: "message_update",
+    assistantMessageEvent: {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<final_answer>\nheadline: need guidance\n\nrelay_question: which path scope should I use?\nassumption: packages/pi-agents-team/src\n</final_answer>",
+        },
+      ],
+    },
+  };
+  return createMockChild(JSON.stringify(relayEvent) + "\n", "", 0);
+}
+
 function makeFakeEdenBin(): { bin: string; dir: string; log: string } {
   const dir = mkdtempSync(join(tmpdir(), "eden-shell-test-"));
   const bin = join(dir, "eden-memory");
@@ -137,16 +176,20 @@ describe("Path A thin extension shell", () => {
     }
   });
 
-  it("registers delegate_task and wait_for_agents tools plus /agents command", () => {
+  it("registers delegate_task, wait_for_agents and abort_worker tools plus /agents and /stop-worker commands", () => {
     const pi = createMockPi();
     extensionFactory(pi);
 
     const toolNames = pi.tools.map((t) => t.name).sort();
-    assert.deepEqual(toolNames, ["delegate_task", "wait_for_agents"]);
+    assert.deepEqual(toolNames, ["abort_worker", "delegate_task", "wait_for_agents"]);
 
     const agentsCmd = pi.commands.find((c) => c.name === "agents");
     assert.ok(agentsCmd, "/agents command should be registered");
-    assert.ok(agentsCmd.def.handler, "/agents command should have a handler");
+    assert.ok(agentsCmd!.def.handler, "/agents command should have a handler");
+
+    const stopCmd = pi.commands.find((c) => c.name === "stop-worker");
+    assert.ok(stopCmd, "/stop-worker command should be registered");
+    assert.ok(stopCmd!.def.handler, "/stop-worker command should have a handler");
   });
 
   it("records a state entry on load and session_start", () => {
@@ -559,6 +602,113 @@ describe("Path A thin extension shell", () => {
     assert.equal(payload.newRelays[0].workerId, "worker-relay");
     assert.equal(payload.newRelays[0].questionId, "q1");
     assert.equal(payload.newRelays[0].question, "Need path scope");
+  });
+
+  it("delegate_task streams a relay question from worker stdout", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createRelayChild();
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    await tool.execute(
+      "call-relay",
+      { title: "Relay task", goal: "ask a question", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    const record = Array.from(_testing.getWorkerMap().values())[0];
+    assert.ok(record, "worker should be tracked");
+    assert.equal(record.status, "completed");
+    assert.equal(record.pendingRelayQuestions.length, 1);
+    assert.equal(record.pendingRelayQuestions[0].question, "which path scope should I use? (assumption: packages/pi-agents-team/src)");
+    assert.ok(record.pendingRelayQuestions[0].questionId?.startsWith("relay-"));
+  });
+
+  it("abort_worker tool kills a running worker and marks it aborted", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createHangingChild();
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const delegateTool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const abortTool = pi.tools.find((t) => t.name === "abort_worker")!.def;
+
+    const delegatePromise = delegateTool.execute(
+      "call-hang",
+      { title: "Hang", goal: "hang forever", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    const workerId = Array.from(_testing.getWorkerMap().keys())[0];
+    assert.ok(workerId, "worker should exist");
+    const record = await waitForController(workerId);
+
+    const abortResult = await abortTool.execute("abort-1", { workerId });
+    const abortPayload = JSON.parse(abortResult.content[0].text);
+    assert.equal(abortPayload.success, true);
+    assert.equal(abortPayload.workerId, workerId);
+    assert.equal(abortPayload.status, "aborted");
+    assert.equal(abortPayload.killed, true);
+
+    assert.equal(record!.status, "aborted");
+
+    await delegatePromise;
+  });
+
+  it("abort_worker tool returns an error for an unknown or terminal worker", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const abortTool = pi.tools.find((t) => t.name === "abort_worker")!.def;
+
+    const missing = await abortTool.execute("abort-2", { workerId: "no-such" });
+    assert.equal(JSON.parse(missing.content[0].text).success, false);
+
+    _testing.getWorkerMap().set("worker-done", {
+      workerId: "worker-done",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: {},
+      finalAnswer: "",
+      pendingRelayQuestions: [],
+    });
+    const terminal = await abortTool.execute("abort-3", { workerId: "worker-done" });
+    const terminalPayload = JSON.parse(terminal.content[0].text);
+    assert.equal(terminalPayload.success, false);
+    assert.equal(terminalPayload.status, "completed");
+  });
+
+  it("/stop-worker command aborts a running worker", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createHangingChild();
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const delegateTool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const stopCmd = pi.commands.find((c) => c.name === "stop-worker")!;
+
+    const delegatePromise = delegateTool.execute(
+      "call-stop",
+      { title: "Hang", goal: "hang forever", profileName: "builder" },
+      undefined,
+      undefined,
+      createMockContext(),
+    );
+
+    const workerId = Array.from(_testing.getWorkerMap().keys())[0];
+    const record = await waitForController(workerId);
+
+    await stopCmd.def.handler(workerId, createMockContext());
+
+    assert.equal(record!.status, "aborted");
+    assert.equal(pi.messages.length, 1);
+    assert.ok(pi.messages[0].content[0].text.includes("aborted"));
+
+    await delegatePromise;
   });
 
   it("wait_for_agents aggregates completed and error results", async () => {

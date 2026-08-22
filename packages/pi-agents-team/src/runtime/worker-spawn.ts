@@ -46,22 +46,100 @@ export async function cleanupTempPrompt(filePath, dir) {
   }
 }
 
-export async function spawnWorker(options) {
+/**
+ * Spawn a worker Pi child process and return a controller that exposes the
+ * running child, a kill function, and a promise for the final result.
+ *
+ * The controller resolves with `{ exitCode, stdout, stderr, error }`.
+ * Optional `onLine(line)` receives every complete stdout line as it arrives.
+ * Optional `signal` (AbortSignal) will terminate the child with `kill()` and
+ * resolve the promise with `error: "aborted"`.
+ */
+export function spawnWorker(options) {
   const command = options.command ?? "pi";
   const args = buildWorkerArgs(options);
   const spawnImpl = options.spawnImpl ?? spawn;
+  const timeoutMs = options.timeoutMs;
+  const onLine = typeof options.onLine === "function" ? options.onLine : null;
+  const signal = options.signal;
 
-  return new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let child;
+  let child = null;
+  let settled = false;
+  let stdout = "";
+  let stderr = "";
+  let stdoutBuffer = "";
+  let aborted = false;
+  let timeoutRef = null;
+  let killTimeoutRef = null;
+  let abortHandler = null;
+
+  const controller = {
+    child,
+    promise: null,
+    kill(sig) {
+      if (!controller.child) return false;
+      try {
+        return controller.child.kill(sig ?? "SIGTERM");
+      } catch {
+        return false;
+      }
+    },
+  };
+
+  controller.promise = new Promise((resolve) => {
+    const cleanup = () => {
+      if (timeoutRef) {
+        clearTimeout(timeoutRef);
+        timeoutRef = null;
+      }
+      if (killTimeoutRef) {
+        clearTimeout(killTimeoutRef);
+        killTimeoutRef = null;
+      }
+      if (abortHandler && signal) {
+        try {
+          signal.removeEventListener("abort", abortHandler);
+        } catch {
+          // Best-effort cleanup.
+        }
+        abortHandler = null;
+      }
+    };
 
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      cleanup();
       resolve(result);
     };
+
+    function flushStdoutLines() {
+      if (!onLine) return;
+      let idx = stdoutBuffer.indexOf("\n");
+      while (idx !== -1) {
+        let line = stdoutBuffer.slice(0, idx);
+        if (line.endsWith("\r")) line = line.slice(0, -1);
+        stdoutBuffer = stdoutBuffer.slice(idx + 1);
+        onLine(line);
+        idx = stdoutBuffer.indexOf("\n");
+      }
+    }
+
+    function handleAbort() {
+      if (settled) return;
+      aborted = true;
+      controller.kill();
+      finish({ exitCode: null, stdout, stderr, error: "aborted" });
+    }
+
+    if (signal) {
+      abortHandler = handleAbort;
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) {
+        handleAbort();
+        return;
+      }
+    }
 
     try {
       child = spawnImpl(command, args, {
@@ -75,8 +153,15 @@ export async function spawnWorker(options) {
       return;
     }
 
+    controller.child = child;
+
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      if (onLine) {
+        stdoutBuffer += text;
+        flushStdoutLines();
+      }
     });
 
     child.stderr.on("data", (chunk) => {
@@ -88,23 +173,26 @@ export async function spawnWorker(options) {
     });
 
     child.on("close", (code, signal) => {
+      if (onLine && stdoutBuffer.length > 0) {
+        onLine(stdoutBuffer);
+        stdoutBuffer = "";
+      }
       finish({
         exitCode: code,
         stdout,
         stderr,
-        error: signal ? `terminated by ${signal}` : undefined,
+        error: aborted ? "aborted" : (signal ? `terminated by ${signal}` : undefined),
       });
     });
 
-    const timeoutMs = options.timeoutMs;
     if (timeoutMs && timeoutMs > 0) {
-      const timeout = setTimeout(() => {
+      timeoutRef = setTimeout(() => {
         try {
           child.kill("SIGTERM");
         } catch {
           // Process may already have exited.
         }
-        setTimeout(() => {
+        killTimeoutRef = setTimeout(() => {
           try {
             child.kill("SIGKILL");
           } catch {
@@ -112,7 +200,8 @@ export async function spawnWorker(options) {
           }
         }, 1000);
       }, timeoutMs);
-      child.on("close", () => clearTimeout(timeout));
     }
   });
+
+  return controller;
 }
