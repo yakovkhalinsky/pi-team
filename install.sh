@@ -192,8 +192,9 @@ printf "\n${BOLD}Step 4: Installing pi-team files${NC}\n\n"
 
 # Remove existing if --force
 if [[ -d "${PI_TEAM_DIR}" && "${FORCE}" == "true" ]]; then
-  info "Removing existing .pi-team/ (--force)"
-  rm -rf "${PI_TEAM_DIR}"
+  PI_TEAM_BACKUP="${PI_TEAM_DIR}.backup.$(date +%s)"
+  info "Backing up existing .pi-team/ to ${PI_TEAM_BACKUP} (--force)"
+  mv "${PI_TEAM_DIR}" "${PI_TEAM_BACKUP}"
 fi
 
 # Create directories
@@ -255,23 +256,20 @@ ok "Created ${PI_CONFIG_FILE}"
 printf "\n${BOLD}Step 6: Updating .gitignore${NC}\n\n"
 
 GITIGNORE="${TARGET_DIR}/.gitignore"
+GITIGNORE_MARKER="# Pi Team runtime"
 GITIGNORE_ENTRIES=(
-  "# Pi Team runtime"
+  "${GITIGNORE_MARKER}"
   ".pi-team/workspace/"
   ".pi-team/.teamwork/"
+  ".pi-team/worktrees/"
+  ".env"
   ""
 )
 
-# Check if entries already exist
-NEEDS_UPDATE=false
-for entry in ".pi-team/workspace/" ".pi-team/.teamwork/"; do
-  if ! grep -qF "${entry}" "${GITIGNORE}" 2>/dev/null; then
-    NEEDS_UPDATE=true
-    break
-  fi
-done
-
-if [[ "${NEEDS_UPDATE}" == "true" ]]; then
+# Append the block only once: marker prevents duplicate headers on reruns
+if grep -qF "${GITIGNORE_MARKER}" "${GITIGNORE}" 2>/dev/null; then
+  ok ".gitignore already has pi-team block"
+else
   # Append with newline if file exists and doesn't end with one
   if [[ -f "${GITIGNORE}" ]]; then
     if [[ -s "${GITIGNORE}" && "$(tail -c1 "${GITIGNORE}")" != "" ]]; then
@@ -282,8 +280,6 @@ if [[ "${NEEDS_UPDATE}" == "true" ]]; then
     printf "%s\n" "${entry}" >> "${GITIGNORE}"
   done
   ok "Updated .gitignore with .pi-team/ runtime entries"
-else
-  ok ".gitignore already has pi-team entries"
 fi
 
 # ─── Step 7: Summary ─────────────────────────────────────────────────────────

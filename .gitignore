@@ -8,6 +8,12 @@ node_modules/
 .pi-team/*
 !.pi-team/reference/
 !.pi-team/reference/*.md
+.pi-team/worktrees/
 .pi/agent/*-agents-team.json
 !.pi/agent/agents-team.json
 .pi/agent/agents-team.json.backup.*
+
+# Local environment / team secrets
+.env
+.env.local
+.env.*.local
