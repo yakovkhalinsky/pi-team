@@ -77,7 +77,7 @@ See [`reference/markers.md`](reference/markers.md).
 
 ## Team presets
 
-The paper does not enumerate presets; it describes one six-role operations fleet in §1. The project provides six presets, each choosing which of the six paper roles are active:
+The paper does not enumerate presets; it describes one six-role operations fleet in §1. The project provides six presets, each choosing which of the six paper roles are active. Presets are documented in `.pi-team/reference/harness-patterns.md`.
 
 | Preset | Active roles | Use when |
 |---|---|---|
@@ -154,6 +154,18 @@ After installation, configure your team in `.pi/agent/agents-team.json`:
   "display": {
     "cost": true
   },
+  "memory": {
+    "edenMemory": {
+      "enabled": true,
+      "semanticSearch": false
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "basePath": ".pi-team/worktrees",
+    "cleanupOnTerminal": true,
+    "cleanupOnPrune": true
+  },
   "roles": {
     "dispatcher": {
       "whenToUse": "Use for Stage 2 (Routing and assignment) — classify the goal, set priority, record ownership and confidence.",
@@ -216,7 +228,6 @@ your-project/
     │   ├── orchestrator.md          # Team Lead contract (Stage 1 + Stage 7)
     │   └── agents/                  # Six paper role prompts
     ├── reference/                   # 7 protocol documents
-    ├── teams/                       # 6 paper-aligned presets
     ├── config/
     │   ├── team.json                # Default role config (canonical)
     │   ├── statuses.json            # Seven-stage lifecycle + transitions
