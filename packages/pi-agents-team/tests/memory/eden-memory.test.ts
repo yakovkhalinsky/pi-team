@@ -112,6 +112,7 @@ describe("eden-memory wrapper", () => {
     const bin = makeFakeBin(`
 const args = process.argv.slice(2);
 if (args[0] !== "remember") { process.exit(1); }
+if (args[1] === "remember") { process.exit(1); }
 const metadataArg = args.indexOf("--metadata");
 if (metadataArg === -1 || !args[metadataArg + 1].includes('"marker"')) { process.exit(1); }
 console.log(JSON.stringify({ id: "mem-123", status: "remembered" }));
@@ -136,6 +137,17 @@ process.exit(1);
     );
     assert.equal(result.ok, false);
     assert.ok(result.error?.includes("database is locked") || result.error?.includes("already locked"), result.error);
+  });
+
+  it("checks health without duplicating the subcommand", async () => {
+    const bin = makeFakeBin(`
+const args = process.argv.slice(2);
+if (args[0] !== "health") { process.exit(1); }
+if (args[1] === "health") { process.exit(1); }
+console.log("ok");
+`);
+    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" });
+    assert.equal(result.ok, true);
   });
 
   it("detects a locked database in health", async () => {
@@ -186,6 +198,7 @@ process.exit(1);
     const bin = makeFakeBin(`
 const args = process.argv.slice(2);
 if (args[0] !== "document") { process.exit(1); }
+if (args[1] === "document") { process.exit(1); }
 console.log("# Summary\\n\\nGoal summary text.");
 `);
     const result = await documentGoal({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", goalId: "g1", format: "md" });
@@ -197,6 +210,7 @@ console.log("# Summary\\n\\nGoal summary text.");
     const bin = makeFakeBin(`
 const args = process.argv.slice(2);
 if (args[0] !== "search") { process.exit(1); }
+if (args[1] === "search") { process.exit(1); }
 const filtersArg = args.indexOf("--filters");
 if (filtersArg === -1 || !args[filtersArg + 1].includes('"stage"')) { process.exit(1); }
 console.log(JSON.stringify({ results: [{ id: "mem-1", content: "blocked task" }] }));

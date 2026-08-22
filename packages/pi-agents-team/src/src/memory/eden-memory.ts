@@ -174,7 +174,6 @@ function buildRememberContent(record) {
 export async function rememberRecord(record, options = {}, signal) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
-    "remember",
     ...buildGlobalArgs(options),
     ...buildIdentityArgs(options),
   ];
@@ -210,7 +209,6 @@ export async function rememberRecord(record, options = {}, signal) {
 export async function documentGoal(options, signal) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
-    "document",
     ...buildGlobalArgs(options),
     ...buildIdentityArgs(options),
   ];
@@ -241,7 +239,6 @@ export async function documentGoal(options, signal) {
 export async function search(options, signal) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
-    "search",
     ...buildGlobalArgs(options),
     ...buildIdentityArgs(options),
   ];
@@ -276,7 +273,7 @@ export async function search(options, signal) {
  */
 export async function health(options = {}) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
-  const args = ["health", ...buildGlobalArgs(options)];
+  const args = [...buildGlobalArgs(options)];
   try {
     const { code, stdout, stderr } = await spawnEden(bin, "health", args);
     const output = (stderr || stdout).toLowerCase();
