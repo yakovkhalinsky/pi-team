@@ -52,4 +52,8 @@ export const _testing: {
   ): Promise<Record<string, string> | undefined>;
   readEnvFile(path: string): Record<string, string>;
   runEnvWizard(ctx: EnvCommandContext, force?: boolean): Promise<EnvWizardResult>;
+  ensureEnvIgnored(cwd: string): boolean;
+  envIsAlreadyIgnored(gitignorePath: string): boolean;
+  findProjectGitignorePath(cwd: string): string;
+  applyEnvToProcessEnv(entries: Record<string, string>): void;
 };

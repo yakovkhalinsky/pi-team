@@ -23,7 +23,7 @@ import {
   recordWorkerRelay,
   recordWorkerTerminal,
 } from "../../src/memory/atp-recorder.js";
-import { getMissingRequiredEnvFields, resolveEdenOptions } from "../../src/memory/eden-memory.js";
+import { getMissingRequiredEdenOptions, resolveEdenOptions } from "../../src/memory/eden-memory.js";
 import { registerTeamAutocomplete } from "../../src/ui/autocomplete.js";
 import { buildTeamStatusLine, buildTeamWidgetLines, getTeamStatusTip, hasAnimatedWorkers } from "../../src/ui/status-widget.js";
 import { createZeroWorkerUsageAggregate } from "../../src/usage.js";
@@ -172,10 +172,14 @@ function buildAtpRecorderOptions(activeProjectConfig, signal) {
     const memoryEnabled = activeProjectConfig?.config?.memory?.edenMemory?.enabled === true;
     if (!memoryEnabled)
         return undefined;
+    const edenOptions = buildEdenMemoryOptions(activeProjectConfig);
+    // Honor the .env kill-switch: EDEN_MEMORY_ENABLED=false/0/no disables recording.
+    if (!edenOptions.enabled)
+        return undefined;
     return {
         env: process.env,
         signal,
-        edenOptions: buildEdenMemoryOptions(activeProjectConfig),
+        edenOptions,
     };
 }
 function buildEdenMemoryOptions(activeProjectConfig) {
@@ -191,6 +195,9 @@ function buildEdenMemoryOptions(activeProjectConfig) {
         ...(typeof memoryConfig?.llmApiKey === "string" ? { llmApiKey: memoryConfig.llmApiKey } : {}),
         ...(typeof memoryConfig?.llmBaseUrl === "string" ? { llmBaseUrl: memoryConfig.llmBaseUrl } : {}),
         ...(typeof memoryConfig?.logLevel === "string" ? { logLevel: memoryConfig.logLevel } : {}),
+        // Config can override the semantic-search flag from env; enabled is kept
+        // from env so EDEN_MEMORY_ENABLED=false/0/no acts as a kill-switch.
+        ...(typeof memoryConfig?.semanticSearch === "boolean" ? { semanticSearch: memoryConfig.semanticSearch } : {}),
     };
 }
 function recordAtpStage(activeProjectConfig, stageRecorder, content, ctx, signal) {
@@ -470,6 +477,8 @@ export const _testing = {
     isProjectConfigTrustedForContext,
     thinkingClampToastKey,
     thinkingLevelWarningToastKey,
+    buildAtpRecorderOptions,
+    buildEdenMemoryOptions,
 };
 export default function (pi) {
     let activeProjectConfig = loadActiveTeamConfig({
@@ -1309,11 +1318,14 @@ export default function (pi) {
             notifyActiveConfigFreshness(ctx, activeProjectConfig);
             notifyThinkingLevelWarnings(ctx, activeProjectConfig.thinkingLevelWarnings);
             if (activeProjectConfig.config.memory?.edenMemory?.enabled === true) {
-                const missingEnv = getMissingRequiredEnvFields();
-                if (missingEnv.length > 0) {
-                    const wizardResult = await runEnvWizard(ctx, false);
-                    const level = wizardResult.missingAfter.length > 0 ? "warning" : "info";
-                    ctx.ui.notify(wizardResult.report.join("\n"), level);
+                const edenOptions = buildEdenMemoryOptions(activeProjectConfig);
+                if (edenOptions.enabled !== false) {
+                    const missingEnv = getMissingRequiredEdenOptions(edenOptions);
+                    if (missingEnv.length > 0) {
+                        const wizardResult = await runEnvWizard(ctx, false);
+                        const level = wizardResult.missingAfter.length > 0 ? "warning" : "info";
+                        ctx.ui.notify(wizardResult.report.join("\n"), level);
+                    }
                 }
             }
             if (event.reason !== "startup" && markedCount > 0 && isTeamActive(activeProjectConfig)) {

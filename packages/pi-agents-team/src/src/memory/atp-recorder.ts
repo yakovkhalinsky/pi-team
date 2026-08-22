@@ -2,7 +2,7 @@ import {
   rememberRecord,
   documentGoal,
   resolveEdenOptions,
-  getMissingRequiredEnvFields,
+  getMissingRequiredEdenOptions,
 } from "./eden-memory.js";
 
 /**
@@ -103,7 +103,8 @@ function buildRecord(stage, content, ctx = {}) {
 }
 
 async function writeStageMarker(stage, content, options = {}, ctx = {}) {
-  const missing = getMissingRequiredEnvFields(options.env);
+  const edenOptions = options.edenOptions ?? resolveEdenOptions(options.env);
+  const missing = getMissingRequiredEdenOptions(edenOptions);
   if (missing.length > 0) {
     return {
       ok: false,
@@ -113,7 +114,6 @@ async function writeStageMarker(stage, content, options = {}, ctx = {}) {
       skipped: true,
     };
   }
-  const edenOptions = options.edenOptions ?? resolveEdenOptions(options.env);
   const record = buildRecord(stage, content, ctx);
   const result = await rememberRecord(record, edenOptions, options.signal);
   return {

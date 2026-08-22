@@ -113,6 +113,25 @@ function tryParseJson(text) {
   }
 }
 
+function parseEnabledFlag(value) {
+  const normalized = (value ?? "").toLowerCase();
+  return !(normalized === "false" || normalized === "0" || normalized === "no");
+}
+
+function parseSemanticSearchFlag(value) {
+  return (value ?? "").toLowerCase() === "true";
+}
+
+const EDEN_OPTION_KEY_MAP = {
+  [EDEN_ENV_FIELDS.BIN]: "bin",
+  [EDEN_ENV_FIELDS.DB]: "db",
+  [EDEN_ENV_FIELDS.WORKSPACE_ID]: "workspaceId",
+  [EDEN_ENV_FIELDS.USER_ID]: "userId",
+  [EDEN_ENV_FIELDS.AGENT_ID]: "agentId",
+  [EDEN_ENV_FIELDS.LLM_API_KEY]: "llmApiKey",
+  [EDEN_ENV_FIELDS.LLM_BASE_URL]: "llmBaseUrl",
+};
+
 function cleanErrorMessage(stderr) {
   const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
   // Prefer the last ERROR/ERR line; eden-memory logs structured errors.
@@ -244,11 +263,6 @@ export async function health(options = {}) {
  * Tests pass a custom env map to avoid touching process.env.
  */
 export function resolveEdenOptions(env = process.env) {
-  const enabled = (env[EDEN_ENV_FIELDS.ENABLED] ?? "").toLowerCase();
-  if (enabled === "false" || enabled === "0" || enabled === "no" || enabled === "") {
-    // Returning an object with enabled implied false lets callers decide whether
-    // to skip the call. The wrapper itself remains usable when explicitly called.
-  }
   return {
     bin: env[EDEN_ENV_FIELDS.BIN] ?? EDEN_DEFAULTS.bin,
     db: env[EDEN_ENV_FIELDS.DB] ?? EDEN_DEFAULTS.db,
@@ -257,6 +271,8 @@ export function resolveEdenOptions(env = process.env) {
     agentId: env[EDEN_ENV_FIELDS.AGENT_ID] ?? EDEN_DEFAULTS.agentId,
     llmApiKey: env[EDEN_ENV_FIELDS.LLM_API_KEY],
     llmBaseUrl: env[EDEN_ENV_FIELDS.LLM_BASE_URL],
+    enabled: parseEnabledFlag(env[EDEN_ENV_FIELDS.ENABLED]),
+    semanticSearch: parseSemanticSearchFlag(env[EDEN_ENV_FIELDS.SEMANTIC_SEARCH]),
   };
 }
 
@@ -282,6 +298,21 @@ export function getMissingRequiredEnvFields(env = process.env) {
   const semanticSearchEnabled = (env[EDEN_ENV_FIELDS.SEMANTIC_SEARCH] ?? "").toLowerCase() === "true";
   const required = getRequiredEnvFieldNames(semanticSearchEnabled);
   return required.filter((name) => !env[name]?.trim());
+}
+
+/**
+ * Check missing required fields from the merged config+env options map.
+ * This honors values supplied by buildEdenMemoryOptions / resolveEdenOptions,
+ * not raw process.env, so config overrides are reflected in the gating check.
+ */
+export function getMissingRequiredEdenOptions(options = {}) {
+  const semanticSearchEnabled = options.semanticSearch === true;
+  const required = getRequiredEnvFieldNames(semanticSearchEnabled);
+  return required.filter((name) => {
+    const key = EDEN_OPTION_KEY_MAP[name];
+    const value = options[key];
+    return typeof value !== "string" || value.trim().length === 0;
+  });
 }
 
 export const _testing = {

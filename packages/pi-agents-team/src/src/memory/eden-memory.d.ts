@@ -9,6 +9,8 @@ export interface EdenMemoryOptions {
   llmBaseUrl?: string;
   logLevel?: string;
   logFormat?: "text" | "json";
+  enabled?: boolean;
+  semanticSearch?: boolean;
 }
 
 export interface EdenRememberRecord {
@@ -93,8 +95,11 @@ export function getRequiredEnvFieldNames(semanticSearchEnabled?: boolean): EdenE
 
 export function getMissingRequiredEnvFields(env?: Record<string, string | undefined>): EdenEnvFieldName[];
 
+export function getMissingRequiredEdenOptions(options?: Partial<EdenMemoryOptions>): EdenEnvFieldName[];
+
 export const _testing: {
-  buildBaseArgs(options?: EdenMemoryOptions): string[];
+  buildGlobalArgs(options?: EdenMemoryOptions): string[];
+  buildIdentityArgs(options?: EdenMemoryOptions): string[];
   buildRememberContent(record: EdenRememberRecord): string;
   cleanErrorMessage(stderr: string): string;
   normalizeTags(tags?: string[]): string;

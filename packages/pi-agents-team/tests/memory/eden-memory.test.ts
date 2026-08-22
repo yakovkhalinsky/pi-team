@@ -11,6 +11,7 @@ import {
   health,
   resolveEdenOptions,
   getMissingRequiredEnvFields,
+  getMissingRequiredEdenOptions,
   getRequiredEnvFieldNames,
 } from "../../src/src/memory/eden-memory.js";
 
@@ -59,6 +60,18 @@ describe("eden-memory wrapper", () => {
     assert.equal(options.workspaceId, EDEN_DEFAULTS.workspaceId);
     assert.equal(options.userId, EDEN_DEFAULTS.userId);
     assert.equal(options.agentId, EDEN_DEFAULTS.agentId);
+    assert.equal(options.enabled, true);
+    assert.equal(options.semanticSearch, false);
+  });
+
+  it("parses the enabled and semantic-search flags", () => {
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.ENABLED]: "false" }).enabled, false);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.ENABLED]: "0" }).enabled, false);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.ENABLED]: "no" }).enabled, false);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.ENABLED]: "true" }).enabled, true);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.ENABLED]: "1" }).enabled, true);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.SEMANTIC_SEARCH]: "true" }).semanticSearch, true);
+    assert.equal(resolveEdenOptions({ [EDEN_ENV_FIELDS.SEMANTIC_SEARCH]: "false" }).semanticSearch, false);
   });
 
   it("reports missing required fields excluding optional LLM keys by default", () => {
@@ -132,6 +145,40 @@ process.exit(1);
     const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" });
     assert.equal(result.ok, false);
     assert.equal(result.locked, true);
+  });
+
+  it("reports missing required fields from merged eden options", () => {
+    const base = {
+      bin: "/bin",
+      db: "/db",
+      workspaceId: "ws",
+      userId: "user",
+      agentId: "agent",
+    };
+    assert.deepEqual(getMissingRequiredEdenOptions(base), []);
+    assert.deepEqual(getMissingRequiredEdenOptions({ ...base, agentId: "" }), [EDEN_ENV_FIELDS.AGENT_ID]);
+    assert.deepEqual(getMissingRequiredEdenOptions({}), [
+      EDEN_ENV_FIELDS.BIN,
+      EDEN_ENV_FIELDS.DB,
+      EDEN_ENV_FIELDS.WORKSPACE_ID,
+      EDEN_ENV_FIELDS.USER_ID,
+      EDEN_ENV_FIELDS.AGENT_ID,
+    ]);
+  });
+
+  it("requires LLM keys in merged eden options when semantic search is enabled", () => {
+    const options = {
+      bin: "/bin",
+      db: "/db",
+      workspaceId: "ws",
+      userId: "user",
+      agentId: "agent",
+      semanticSearch: true,
+    };
+    const missing = getMissingRequiredEdenOptions(options);
+    assert.ok(missing.includes(EDEN_ENV_FIELDS.LLM_API_KEY));
+    assert.ok(missing.includes(EDEN_ENV_FIELDS.LLM_BASE_URL));
+    assert.equal(getMissingRequiredEdenOptions({ ...options, llmApiKey: "sk", llmBaseUrl: "https://x" }).length, 0);
   });
 
   it("documents a goal from CLI stdout", async () => {

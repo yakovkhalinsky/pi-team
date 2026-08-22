@@ -49,9 +49,11 @@ function createCtx(cwd: string, hasUI = true) {
 
 describe("/team-env command", () => {
   let tmpDir: string;
+  let originalEnv: Record<string, string | undefined>;
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "team-env-test-"));
+    originalEnv = { ...process.env };
   });
 
   afterEach(() => {
@@ -59,6 +61,14 @@ describe("/team-env command", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch {
       // ignore
+    }
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) {
+        delete process.env[key];
+      }
+    }
+    for (const [key, value] of Object.entries(originalEnv)) {
+      process.env[key] = value;
     }
   });
 
@@ -157,11 +167,22 @@ describe("/team-env command", () => {
     assert.ok(text.includes("https://api.example.com"));
   });
 
-  it("reports that Pi must restart after writing .env", async () => {
+  it("reports that env vars are active in the current session after writing .env", async () => {
     const ctx = createCtx(tmpDir);
     ctx.ui.confirm = async () => false;
     const result = await _testing.runEnvWizard(ctx, false);
-    assert.ok(result.report.some((line) => line.includes("Restart Pi") || line.includes("/reload")));
+    assert.ok(result.report.some((line) => line.includes("active in the current session")));
+  });
+
+  it("refreshes process.env with the written eden-memory values", async () => {
+    const ctx = createCtx(tmpDir);
+    ctx.ui.confirm = async () => false;
+    delete process.env[EDEN_ENV_FIELDS.AGENT_ID];
+    delete process.env[EDEN_ENV_FIELDS.WORKSPACE_ID];
+    const result = await _testing.runEnvWizard(ctx, false);
+    assert.equal(result.updated, true);
+    assert.ok(process.env[EDEN_ENV_FIELDS.AGENT_ID], "AGENT_ID should be set in process.env");
+    assert.ok(process.env[EDEN_ENV_FIELDS.WORKSPACE_ID], "WORKSPACE_ID should be set in process.env");
   });
 
   it("escapes newlines in env values", () => {

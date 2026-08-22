@@ -26,6 +26,8 @@ const FIELD_DESCRIPTIONS = {
   [EDEN_ENV_FIELDS.LLM_BASE_URL]: "LLM base URL for semantic search",
 };
 
+const EDEN_FIELD_NAMES = new Set(Object.values(EDEN_ENV_FIELDS));
+
 function readEnvFile(path) {
   if (!existsSync(path)) return {};
   const text = readFileSync(path, "utf8");
@@ -53,6 +55,14 @@ function buildEnvContents(entries) {
   }
   lines.push("");
   return lines.join("\n");
+}
+
+function applyEnvToProcessEnv(entries) {
+  for (const [key, value] of Object.entries(entries)) {
+    if (EDEN_FIELD_NAMES.has(key)) {
+      process.env[key] = value;
+    }
+  }
 }
 
 function mergeWithDefaults(entries) {
@@ -183,12 +193,13 @@ export async function runEnvWizard(ctx, force = false) {
     report.push(`Backed up previous .env to ${backupPath}.`);
   }
   atomicWriteFileSync(envPath, buildEnvContents(entries), { mode: 0o600 });
+  applyEnvToProcessEnv(entries);
   const gitignoreUpdated = ensureEnvIgnored(ctx.cwd);
   report.push(`Wrote ${envPath}.`);
   if (gitignoreUpdated) {
     report.push(`Added .env to ${findProjectGitignorePath(ctx.cwd)}.`);
   }
-  report.push("Restart Pi or /reload the session for the new env vars to take effect.");
+  report.push("Env vars are now active in the current session.");
 
   // Surface lock conflicts immediately so the user knows to stop a conflicting
   // eden-memory process before writes can succeed.
@@ -284,4 +295,5 @@ export const _testing = {
   ensureEnvIgnored,
   envIsAlreadyIgnored,
   findProjectGitignorePath,
+  applyEnvToProcessEnv,
 };

@@ -127,8 +127,39 @@ describe("ATP recorder", () => {
     }
   });
 
+  it("uses merged eden options instead of raw env when gating recording", async () => {
+    const env = buildEnv(bin);
+    const edenOptions = {
+      bin: env[EDEN_ENV_FIELDS.BIN],
+      db: env[EDEN_ENV_FIELDS.DB],
+      workspaceId: env[EDEN_ENV_FIELDS.WORKSPACE_ID],
+      userId: env[EDEN_ENV_FIELDS.USER_ID],
+      agentId: env[EDEN_ENV_FIELDS.AGENT_ID],
+      enabled: true,
+      semanticSearch: false,
+    };
+    // env is empty, but edenOptions carries the merged values.
+    const result = await recordAction("Built artefact", { env: {}, edenOptions }, { goalId: "g1" });
+    assert.equal(result.ok, true, "should record using merged edenOptions");
+  });
+
+  it("skips recording when merged eden options are missing required fields", async () => {
+    const result = await recordAction("Built artefact", { env: {}, edenOptions: { enabled: true, semanticSearch: false } }, { goalId: "g1" });
+    assert.equal(result.ok, false);
+    assert.equal(result.skipped, true);
+    assert.ok(result.error?.includes("Missing required eden-memory env fields"));
+    assert.ok(result.error?.includes(EDEN_ENV_FIELDS.BIN));
+  });
+
   it("skips recording when required env fields are missing", async () => {
-    const result = await recordAction("Built artefact", { env: {} }, { goalId: "g1" });
+    const env = {
+      [EDEN_ENV_FIELDS.BIN]: "",
+      [EDEN_ENV_FIELDS.DB]: "",
+      [EDEN_ENV_FIELDS.WORKSPACE_ID]: "",
+      [EDEN_ENV_FIELDS.USER_ID]: "",
+      [EDEN_ENV_FIELDS.AGENT_ID]: "",
+    };
+    const result = await recordAction("Built artefact", { env }, { goalId: "g1" });
     assert.equal(result.ok, false);
     assert.equal(result.skipped, true);
     assert.ok(result.error?.includes("Missing required eden-memory env fields"));
