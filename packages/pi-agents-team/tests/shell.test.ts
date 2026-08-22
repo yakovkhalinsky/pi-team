@@ -172,6 +172,19 @@ describe("Path A thin extension shell", () => {
     assert.ok(agents.every((a) => typeof a.description === "string" && a.description.length > 0));
   });
 
+  it("falls back to package agents when no project override exists", () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "pi-agents-fallback-"));
+    try {
+      const agents = _testing.discoverAgents(tmpDir);
+      const names = agents.map((a) => a.name);
+      for (const required of ["archivist", "builder", "dispatcher", "researcher", "runtime", "verifier"]) {
+        assert.ok(names.includes(required), `should discover ${required} from package fallback`);
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("injects a deterministic agent list into the orchestrator system prompt", async () => {
     const pi = createMockPi();
     extensionFactory(pi);
@@ -244,6 +257,14 @@ describe("Path A thin extension shell", () => {
     assert.ok(text.includes('Agent "unknown" not found.'));
     assert.ok(text.includes("Available agents:"));
     assert.ok(text.includes("builder"));
+  });
+
+  it("buildWorkerTaskText prepends the final-answer contract instruction", () => {
+    const text = _testing.buildWorkerTaskText({ goal: "do the thing" });
+    assert.ok(text.includes("When you are finished, wrap your complete final response in a single XML block"));
+    assert.ok(text.includes("<final_answer>"));
+    assert.ok(text.includes("do the thing"));
+    assert.ok(text.startsWith("When you are finished"));
   });
 
   it("delegate_task spawns a worker with the right command and arguments", async () => {

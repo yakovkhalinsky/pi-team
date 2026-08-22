@@ -120,24 +120,30 @@ function findProjectAgentsDir(cwd) {
   }
 }
 
+function getPackageAgentsDir() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "../../../.pi/agents");
+}
+
 function discoverAgents(cwd) {
   const userDir = path.join(getAgentDir(), "agents");
   const projectDir = findProjectAgentsDir(cwd);
+  const packageDir = getPackageAgentsDir();
 
   const userAgents = loadAgentsFromDir(userDir, "user");
   const projectAgents = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
+  const packageAgents = loadAgentsFromDir(packageDir, "package");
 
   const map = new Map();
   for (const agent of userAgents) map.set(agent.name, agent);
+  for (const agent of packageAgents) map.set(agent.name, agent);
   for (const agent of projectAgents) map.set(agent.name, agent);
 
   return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function hasProjectAgents(cwd) {
-  const dir = findProjectAgentsDir(cwd);
-  if (!dir) return false;
-  return loadAgentsFromDir(dir, "project").length > 0;
+  return discoverAgents(cwd).length > 0;
 }
 
 function formatAgentList(agents) {
@@ -292,7 +298,10 @@ function buildWorkerTaskText(params) {
   if (params.skills?.length) {
     parts.push(`\n\nSkills:\n${params.skills.join(", ")}`);
   }
-  return parts.join("");
+  const body = parts.join("");
+  const instruction =
+    "When you are finished, wrap your complete final response in a single XML block: `<final_answer> ... </final_answer>`. Do not include any other content after this block.";
+  return `${instruction}\n\n${body}`;
 }
 
 function makeDelegateResult(workerId, status, result, error) {
