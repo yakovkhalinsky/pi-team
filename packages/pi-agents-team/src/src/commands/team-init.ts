@@ -57,7 +57,7 @@ function buildFullScaffold() {
         },
         memory: {
             edenMemory: {
-                enabled: false,
+                enabled: true,
                 semanticSearch: false,
             },
         },

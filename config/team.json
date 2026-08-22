@@ -9,6 +9,18 @@
   "display": {
     "cost": true
   },
+  "memory": {
+    "edenMemory": {
+      "enabled": true,
+      "semanticSearch": false
+    }
+  },
+  "worktree": {
+    "enabled": true,
+    "basePath": ".pi-team/worktrees",
+    "cleanupOnTerminal": true,
+    "cleanupOnPrune": true
+  },
   "roles": {
     "dispatcher": {
       "whenToUse": "Use for Stage 2 (Routing and assignment) of the seven-stage lifecycle — classify the goal, set priority, record ownership and confidence. The paper names this role first; no goal skips the dispatch.",

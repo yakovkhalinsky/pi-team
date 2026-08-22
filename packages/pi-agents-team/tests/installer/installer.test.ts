@@ -114,6 +114,30 @@ describe("installer/install.sh", () => {
         assert.ok(existsSync(originalMarker), "new .pi-team should contain fresh files");
     });
 
+    it("backs up agents-team.json when --force is used", () => {
+        const target = makeTarget();
+        const first = runInstaller(target);
+        assert.equal(first.status, 0, `first install failed: ${first.stderr}`);
+
+        const configPath = join(target, ".pi", "agent", "agents-team.json");
+        assert.ok(existsSync(configPath), "expected agents-team.json to be created");
+        writeFileSync(configPath, "{\"sentinel\":true}", { flag: "w" });
+
+        const second = runInstaller(target, ["--force"]);
+        assert.equal(second.status, 0, `forced install failed: ${second.stderr}`);
+
+        const entries = readdirSync(join(target, ".pi", "agent"))
+            .filter((e) => e.startsWith("agents-team.json.backup."));
+        assert.ok(entries.length >= 1, "expected an agents-team.json backup file");
+
+        const backupPath = join(target, ".pi", "agent", entries[0]);
+        assert.equal(readFileSync(backupPath, "utf8"), "{\"sentinel\":true}", "backup should contain the overwritten config");
+
+        const currentConfig = JSON.parse(readFileSync(configPath, "utf8"));
+        assert.equal(currentConfig.memory?.edenMemory?.enabled, true, "new config should enable edenMemory");
+        assert.equal(currentConfig.worktree?.enabled, true, "new config should enable worktrees");
+    });
+
     it("refuses to overwrite .pi-team/ without --force", () => {
         const target = makeTarget();
         const first = runInstaller(target);

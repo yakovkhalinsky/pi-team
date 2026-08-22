@@ -246,7 +246,8 @@ ok "Helper scripts installed"
 printf "\n${BOLD}Step 5: Creating pi agents-team config${NC}\n\n"
 
 if [[ -f "${PI_CONFIG_FILE}" && "${FORCE}" == "true" ]]; then
-  info "Overwriting agents-team.json (--force)"
+  info "Overwriting agents-team.json (--force) — backing up first"
+  cp "${PI_CONFIG_FILE}" "${PI_CONFIG_FILE}.backup.$(date +%s)"
 fi
 
 cp "${SOURCE_DIR}/config/team.json" "${PI_CONFIG_FILE}"
