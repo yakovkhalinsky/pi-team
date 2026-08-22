@@ -235,7 +235,7 @@ Before the thin-extension refactor lands, apply these defensive wrappers as a cr
 ## Path A Implementation Outcome
 
 **Status:** completed and verified on branch `path-a-shell`.  
-**Final commit hash:** `8685d75` (current HEAD of `path-a-shell` at the time of this update).  
+**Final commit hash:** `b10bb4f` (current HEAD of `path-a-shell` at the time of this update).  
 **Date:** 2026-08-22
 
 ### Summary of what was implemented
@@ -260,27 +260,42 @@ Before the thin-extension refactor lands, apply these defensive wrappers as a cr
 
 ### Verification results
 
-- **72 tests passing.**
+- **83 tests passing.**
 - **Build clean.**
 - **Typecheck clean.**
+- **Live `delegate_task` to `builder` now succeeds and returns `finalAnswer: "hello"`.**
 - **Verifier:** APPROVE.
 
 ### Known limitations
 
 - No interactive dashboard remains; agent status is available only through the text `/agents` summary and tooling.
 - `wait_for_agents` state is kept **in-memory only**; it is not persisted across extension reloads.
-- Real `pi` spawn was **not exercised in automated tests**; the worker delegation path was tested against mocked/spawn-observed behavior.
+- Real `pi` spawn was **not exercised in automated tests**; the worker delegation path was tested against mocked/spawn-observed behavior, but the live `delegate_task` to `builder` now works end-to-end.
 - Eden-memory goal detection is **heuristic**: it depends on the eden-memory `search` CLI returning consistent ATP marker metadata, so false positives or missed goals are possible.
 - Eden-memory CLI integration was exercised with mocked CLI behavior; a live eden-memory binary and populated memory store have not been validated in automated tests.
 
-### Deferred point 5 (harness watchdog)
+## Pending Gaps (Post-Merge Follow-ups)
 
-Point 5 from the earlier cancellation fix — a harness-level watchdog for stuck worker processes — is still noted, but it is now less relevant because the overlay itself has been removed. Any future watchdog work should target worker-lifecycle safety in the thin shell rather than overlay state recovery.
+These items are **non-blockers** for merging Path A, but they should be tracked and closed in follow-up sprints.
 
-### Next recommendation
+| # | Gap | Priority | Notes |
+|---|-----|----------|-------|
+| 1 | **Worker cancellation / abort path** | **P1** | `agent_cancel` was removed during cleanup and no replacement exists; a hung worker can block the orchestrator for the full timeout. |
+| 2 | **Relay-question capture** | **P1** | `wait_for_agents` has `wakeOnRelay` logic, but `pendingRelayQuestions` is only populated by tests/mocks. Real pi worker relay questions are not parsed from stdout, so the wake path is not exercised live. |
+| 3 | **Eden-memory DB lock** | **P1** | Environment-level contention on this machine; the extension surfaces a single warning and continues, but CI / live demos may hit the stale holder until it is cleared. |
+| 4 | **Status widget / active-worker count** | **P2** | Path A removed the dashboard entirely. A lightweight status line or active-worker count would help the orchestrator and user stay oriented. |
+| 5 | **Worktree isolation** | **P2** | Workers currently share the project cwd. This is an intentional simplification, but it is a regression from the previous worktree-isolated model. |
+| 6 | **Skill loading per agent** | **P1** | `delegate_task` accepts a `skills` array but does not load the named skills into the worker, so declared skills are not actually available at runtime. |
+| 7 | **Short stable goalId** | **P2** | The current implementation uses the full goal text as `goalId` metadata, which is verbose and can destabilize matching. A short, stable hash or slug should be used instead. |
+| 8 | **Type guard for `event.systemPrompt.includes`** | **P2** | A runtime type guard is needed before calling `.includes` on `event.systemPrompt`; otherwise malformed events can throw. |
+| 9 | **Refresh blocked-goals list during session** | **P1** | The eden-memory blocked/unfinished goals list is only fetched at startup; it should be refreshed during the session so newly blocked goals are surfaced promptly. |
 
-Before merging `path-a-shell` to `main`:
+## Recommended next sprint
 
-1. **Smoke-test against a real `pi` binary.** Run a live `/agents` summary and a real `delegate_task` end-to-end to confirm worker spawn, relay, and `<final_answer>` extraction behave with the actual host.
-2. **Smoke-test eden-memory in a live session.** Verify that blocked/unfinished goals are detected from a real eden-memory store and that the `before_agent_start` prompt injection surfaces them correctly.
-3. **Consider adding `package-lock.json`.** Reproducible installs will help CI and future contributors, especially now that the package surface has been reduced.
+Prioritize the **P1** gaps and one integration test before tackling UI refinements:
+
+1. **Restore worker cancellation / abort.** Add a minimal `agent_cancel` (or `delegate_task` abort signal) that can terminate a hung worker or at least stop waiting on it.
+2. **Make relay-question capture real.** Parse `relay:` / question markers from worker stdout so `wait_for_agents` can wake and return relay questions to the orchestrator.
+3. **Add one real eden-memory integration test.** Exercise the live eden-memory binary with a populated store to validate blocked/unfinished goal detection and `before_agent_start` prompt injection.
+4. **Load named skills into the worker.** Wire the `skills` array from `delegate_task` into the worker context so agents can actually use them.
+5. **Refresh blocked goals during the session.** Move the eden-memory blocked-goals check from startup-only to a periodic or event-triggered refresh.
