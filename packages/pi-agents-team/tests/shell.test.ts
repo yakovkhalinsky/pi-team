@@ -189,12 +189,13 @@ describe("Path A thin extension shell", () => {
     assert.ok(payload.workerId.startsWith("worker-"));
     assert.equal(payload.status, "completed");
     assert.equal(payload.result.headline, "did the thing");
-    assert.ok(payload.result.finalAnswerText.includes("result body"));
+    assert.ok(payload.result.finalAnswer.includes("result body"));
 
     const record = _testing.getWorkerMap().get(payload.workerId);
     assert.ok(record, "worker should be tracked in memory");
     assert.equal(record.status, "completed");
     assert.equal(record.result.headline, "did the thing");
+    assert.ok(record.finalAnswer.includes("result body"));
   });
 
   it("delegate_task returns a clear error for an unknown profile", async () => {
@@ -210,12 +211,12 @@ describe("Path A thin extension shell", () => {
 
     const payload = JSON.parse(result.content[0].text);
     assert.ok(payload.workerId.startsWith("worker-"));
-    assert.equal(payload.status, "failed");
+    assert.equal(payload.status, "error");
     assert.ok(payload.error.includes("Unknown agent profile"));
     assert.ok(payload.error.includes("nonexistent"));
 
     const record = _testing.getWorkerMap().get(payload.workerId);
-    assert.equal(record.status, "failed");
+    assert.equal(record.status, "error");
     assert.ok(record.error.includes("nonexistent"));
   });
 
@@ -234,11 +235,11 @@ describe("Path A thin extension shell", () => {
     );
 
     const payload = JSON.parse(result.content[0].text);
-    assert.equal(payload.status, "failed");
+    assert.equal(payload.status, "error");
     assert.ok(payload.error.includes("exited with code 1"));
 
     const record = _testing.getWorkerMap().get(payload.workerId);
-    assert.equal(record.status, "failed");
+    assert.equal(record.status, "error");
     assert.ok(record.stderr.includes("spawn failed"));
   });
 
@@ -257,11 +258,11 @@ describe("Path A thin extension shell", () => {
     );
 
     const payload = JSON.parse(result.content[0].text);
-    assert.equal(payload.status, "failed");
+    assert.equal(payload.status, "error");
     assert.ok(payload.error.includes("No <final_answer>"));
 
     const record = _testing.getWorkerMap().get(payload.workerId);
-    assert.equal(record.status, "failed");
+    assert.equal(record.status, "error");
   });
 
   it("wait_for_agents returns tracked worker statuses", async () => {
@@ -282,8 +283,191 @@ describe("Path A thin extension shell", () => {
 
     const waitResult = await waitTool.execute("call-6", { workerIds: [workerId], timeoutMs: 1000 });
     const payload = JSON.parse(waitResult.content[0].text);
+    assert.equal(payload.reason, "all_terminal");
     assert.equal(payload.workers.length, 1);
     assert.equal(payload.workers[0].workerId, workerId);
-    assert.equal(payload.workers[0].status, "failed");
+    assert.equal(payload.workers[0].status, "error");
+    assert.ok(payload.workers[0].error.includes("Unknown agent profile"));
+  });
+
+  it("wait_for_agents waits on all tracked workers when no IDs are provided", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const map = _testing.getWorkerMap();
+    map.set("worker-a", {
+      workerId: "worker-a",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: { headline: "done", finalAnswer: "answer-a" },
+      finalAnswer: "answer-a",
+      pendingRelayQuestions: [],
+    });
+    map.set("worker-b", {
+      workerId: "worker-b",
+      profileName: "verifier",
+      status: "error",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      error: "boom",
+      exitCode: 1,
+      pendingRelayQuestions: [],
+    });
+
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
+    const waitResult = await waitTool.execute("call-7", { timeoutMs: 1000 });
+    const payload = JSON.parse(waitResult.content[0].text);
+
+    assert.equal(payload.reason, "all_terminal");
+    assert.equal(payload.workers.length, 2);
+    const statuses = payload.workers.map((w) => w.status).sort();
+    assert.deepEqual(statuses, ["completed", "error"]);
+    const a = payload.workers.find((w) => w.workerId === "worker-a");
+    assert.equal(a!.result.headline, "done");
+    const b = payload.workers.find((w) => w.workerId === "worker-b");
+    assert.ok(b!.error.includes("boom"));
+  });
+
+  it("wait_for_agents waits on explicit worker IDs only", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const map = _testing.getWorkerMap();
+    map.set("worker-1", {
+      workerId: "worker-1",
+      profileName: "builder",
+      status: "running",
+      startTime: Date.now(),
+      pendingRelayQuestions: [],
+    });
+    map.set("worker-2", {
+      workerId: "worker-2",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: {},
+      finalAnswer: "",
+      pendingRelayQuestions: [],
+    });
+    map.set("worker-3", {
+      workerId: "worker-3",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: {},
+      finalAnswer: "",
+      pendingRelayQuestions: [],
+    });
+
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
+    const waitResult = await waitTool.execute("call-8", {
+      workerIds: ["worker-2", "worker-3"],
+      timeoutMs: 1000,
+    });
+    const payload = JSON.parse(waitResult.content[0].text);
+
+    assert.equal(payload.reason, "all_terminal");
+    assert.deepEqual(
+      payload.workers.map((w) => w.workerId).sort(),
+      ["worker-2", "worker-3"],
+    );
+  });
+
+  it("wait_for_agents returns timeout when a worker stays running", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    _testing.getWorkerMap().set("worker-running", {
+      workerId: "worker-running",
+      profileName: "builder",
+      status: "running",
+      startTime: Date.now(),
+      pendingRelayQuestions: [],
+    });
+
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
+    const start = Date.now();
+    const waitResult = await waitTool.execute("call-9", {
+      workerIds: ["worker-running"],
+      timeoutMs: 50,
+    });
+    const elapsed = Date.now() - start;
+    const payload = JSON.parse(waitResult.content[0].text);
+
+    assert.equal(payload.reason, "timeout");
+    assert.equal(payload.workers.length, 1);
+    assert.equal(payload.workers[0].status, "running");
+    assert.ok(elapsed < 500, "should time out quickly");
+  });
+
+  it("wait_for_agents returns relay_raised early when a worker has pending relay questions", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    _testing.getWorkerMap().set("worker-relay", {
+      workerId: "worker-relay",
+      profileName: "builder",
+      status: "running",
+      startTime: Date.now(),
+      pendingRelayQuestions: [{ questionId: "q1", question: "Need path scope" }],
+    });
+
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
+    const waitResult = await waitTool.execute("call-10", {
+      workerIds: ["worker-relay"],
+      timeoutMs: 10_000,
+    });
+    const payload = JSON.parse(waitResult.content[0].text);
+
+    assert.equal(payload.reason, "relay_raised");
+    assert.equal(payload.workers.length, 1);
+    assert.equal(payload.workers[0].status, "running");
+    assert.equal(payload.newRelays.length, 1);
+    assert.equal(payload.newRelays[0].workerId, "worker-relay");
+    assert.equal(payload.newRelays[0].questionId, "q1");
+    assert.equal(payload.newRelays[0].question, "Need path scope");
+  });
+
+  it("wait_for_agents aggregates completed and error results", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const map = _testing.getWorkerMap();
+    map.set("worker-ok", {
+      workerId: "worker-ok",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: { headline: "ok", finalAnswer: "all good" },
+      finalAnswer: "all good",
+      pendingRelayQuestions: [],
+    });
+    map.set("worker-bad", {
+      workerId: "worker-bad",
+      profileName: "verifier",
+      status: "error",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      error: "validation failed",
+      exitCode: 2,
+      pendingRelayQuestions: [],
+    });
+
+    const waitTool = pi.tools.find((t) => t.name === "wait_for_agents")!.def;
+    const waitResult = await waitTool.execute("call-11", { timeoutMs: 1000 });
+    const payload = JSON.parse(waitResult.content[0].text);
+
+    assert.equal(payload.reason, "all_terminal");
+    const ok = payload.workers.find((w) => w.workerId === "worker-ok");
+    const bad = payload.workers.find((w) => w.workerId === "worker-bad");
+    assert.equal(ok!.status, "completed");
+    assert.equal(ok!.result.headline, "ok");
+    assert.equal(bad!.status, "error");
+    assert.equal(bad!.error, "validation failed");
   });
 });

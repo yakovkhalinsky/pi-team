@@ -164,9 +164,35 @@ const WaitForAgentsSchema = Type.Object(
   {
     workerIds: Type.Optional(Type.Array(Type.String(), { description: "Specific worker ids to wait on" })),
     timeoutMs: Type.Optional(Type.Number({ description: "Maximum wait in milliseconds" })),
+    wakeOnRelay: Type.Optional(Type.Boolean({ description: "Return early if a worker raises a relay question" })),
   },
   { additionalProperties: false },
 );
+
+const TERMINAL_STATUSES = new Set(["completed", "error", "exited", "aborted"]);
+
+export function isTerminalStatus(status) {
+  return TERMINAL_STATUSES.has(status);
+}
+
+export function collectWorkerResult(record) {
+  if (record.status === "completed") {
+    return { result: record.result ?? {} };
+  }
+  if (isTerminalStatus(record.status)) {
+    return { error: record.error ?? "Worker ended without result" };
+  }
+  return {};
+}
+
+export function formatRelayList(pendingRelayQuestions) {
+  return (pendingRelayQuestions ?? []).map((q) => ({
+    workerId: q.workerId,
+    questionId: q.questionId ?? `relay-${Math.random().toString(36).slice(2, 8)}`,
+    question: q.question ?? q.text ?? "Unspecified relay question",
+    askedAt: q.askedAt ?? Date.now(),
+  }));
+}
 
 const workers = new Map();
 
@@ -180,7 +206,8 @@ function createWorkerRecord(workerId, profileName, title) {
     profileName,
     title,
     status: "running",
-    startedAt: Date.now(),
+    startTime: Date.now(),
+    pendingRelayQuestions: [],
   };
   workers.set(workerId, record);
   return record;
@@ -189,7 +216,7 @@ function createWorkerRecord(workerId, profileName, title) {
 function settleWorker(workerId, update) {
   const record = workers.get(workerId);
   if (!record) return;
-  Object.assign(record, update, { settledAt: Date.now() });
+  Object.assign(record, update, { endTime: Date.now() });
 }
 
 function buildWorkerTaskText(params) {
@@ -221,6 +248,9 @@ export const _testing = {
   getWorkerMap: () => workers,
   clearWorkers: () => workers.clear(),
   buildWorkerTaskText,
+  isTerminalStatus,
+  collectWorkerResult,
+  formatRelayList,
 };
 
 export default function (pi, options = {}) {
@@ -273,8 +303,8 @@ export default function (pi, options = {}) {
         const available = agents.map((a) => a.name).join(", ") || "none";
         const error = `Unknown agent profile: "${params.profileName}". Available: ${available}.`;
         createWorkerRecord(workerId, params.profileName, params.title);
-        settleWorker(workerId, { status: "failed", error });
-        return makeDelegateResult(workerId, "failed", {}, error);
+        settleWorker(workerId, { status: "error", error });
+        return makeDelegateResult(workerId, "error", {}, error);
       }
 
       createWorkerRecord(workerId, params.profileName, params.title);
@@ -309,37 +339,41 @@ export default function (pi, options = {}) {
         if (result.error || result.exitCode !== 0) {
           const error = result.error || `Worker exited with code ${result.exitCode}`;
           settleWorker(workerId, {
-            status: "failed",
+            status: "error",
             error,
             stderr: result.stderr,
             stdout: result.stdout,
+            exitCode: result.exitCode ?? null,
           });
-          return makeDelegateResult(workerId, "failed", { ...summary, finalAnswerText }, error);
+          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
         }
 
         if (!finalAnswerText) {
           const error = "No <final_answer> block found in worker output";
           settleWorker(workerId, {
-            status: "failed",
+            status: "error",
             error,
             stderr: result.stderr,
             stdout: result.stdout,
+            exitCode: result.exitCode ?? null,
           });
-          return makeDelegateResult(workerId, "failed", { ...summary, finalAnswerText }, error);
+          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
         }
 
-        const workerResult = { ...summary, finalAnswerText };
+        const workerResult = { ...summary, finalAnswer: finalAnswerText };
         settleWorker(workerId, {
           status: "completed",
           result: workerResult,
+          finalAnswer: finalAnswerText,
           stderr: result.stderr,
           stdout: result.stdout,
+          exitCode: result.exitCode ?? 0,
         });
         return makeDelegateResult(workerId, "completed", workerResult);
       } catch (err) {
         const error = err?.message ?? String(err);
-        settleWorker(workerId, { status: "failed", error });
-        return makeDelegateResult(workerId, "failed", {}, error);
+        settleWorker(workerId, { status: "error", error });
+        return makeDelegateResult(workerId, "error", {}, error);
       } finally {
         await cleanupTempPrompt(tmpFilePath, tmpDir);
       }
@@ -353,34 +387,70 @@ export default function (pi, options = {}) {
     parameters: WaitForAgentsSchema,
     async execute(_toolCallId, params) {
       const ids = params.workerIds ?? Array.from(workers.keys());
-      const timeoutMs = params.timeoutMs ?? 30_000;
-      const pollInterval = 250;
+      const timeoutMs = params.timeoutMs ?? 300_000;
+      const wakeOnRelay = params.wakeOnRelay ?? true;
+      const pollInterval = 200;
       const start = Date.now();
 
-      while (true) {
-        const results = ids.map((id) => {
-          const w = workers.get(id);
-          if (!w) return { workerId: id, status: "unknown", result: {}, error: "Worker not found" };
-          return {
-            workerId: w.workerId,
-            status: w.status,
-            result: w.result ?? {},
-            error: w.error,
-          };
-        });
+      function snapshotWorker(id) {
+        const w = workers.get(id);
+        if (!w) {
+          return { workerId: id, status: "error", error: "Worker not found" };
+        }
+        return { workerId: w.workerId, status: w.status, ...collectWorkerResult(w) };
+      }
 
-        const allSettled = results.every(
-          (r) => r.status === "completed" || r.status === "failed" || r.status === "unknown",
-        );
-        if (allSettled) {
+      function snapshotWorkers() {
+        return ids.map(snapshotWorker);
+      }
+
+      while (true) {
+        const allTerminal = ids.every((id) => {
+          const w = workers.get(id);
+          return w ? isTerminalStatus(w.status) : true;
+        });
+        if (allTerminal) {
           return {
-            content: [{ type: "text", text: JSON.stringify({ workers: results }) }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ reason: "all_terminal", workers: snapshotWorkers() }),
+              },
+            ],
           };
+        }
+
+        if (wakeOnRelay) {
+          const relayQuestions = ids.flatMap((id) => {
+            const w = workers.get(id);
+            if (!w) return [];
+            return (w.pendingRelayQuestions ?? []).map((q) => ({ workerId: id, ...q }));
+          });
+          const newRelays = formatRelayList(relayQuestions);
+          if (newRelays.length > 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    reason: "relay_raised",
+                    workers: snapshotWorkers(),
+                    newRelays,
+                  }),
+                },
+              ],
+            };
+          }
         }
 
         if (Date.now() - start >= timeoutMs) {
           return {
-            content: [{ type: "text", text: JSON.stringify({ workers: results, timedOut: true }) }],
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({ reason: "timeout", workers: snapshotWorkers() }),
+              },
+            ],
           };
         }
 
