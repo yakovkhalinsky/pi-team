@@ -1,0 +1,15 @@
+{
+  "name": "pi-team",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local workspace for the Pi Agents Team extension and its Pi install wiring.",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter pi-agents-team run build",
+    "typecheck": "pnpm --filter pi-agents-team run typecheck",
+    "check": "pnpm --filter pi-agents-team run check"
+  }
+}
