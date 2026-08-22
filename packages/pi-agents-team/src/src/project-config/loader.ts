@@ -754,7 +754,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
             layerRoot: winningLayer.layerRoot,
             layerPath: winningLayer.path,
             requireInsideLayerRoot: winningLayer.requireInsideLayerRoot,
-            allowWorkerPathsOutsideProject: winningLayer.parsed.workerAccess?.allowPathsOutsideProject !== false,
+            allowWorkerPathsOutsideProject: winningLayer.parsed.workerAccess?.allowPathsOutsideProject === true,
             roles,
         };
         profiles = Object.entries(roles).map(([roleName, rawRoleConfig]) => {
@@ -821,7 +821,7 @@ export function loadActiveTeamConfig(options = { cwd: process.cwd() }) {
         diagnostics.unshift(makeDiagnostic("info", "project_config_loaded", `Loaded ${layer.scope} ${TEAM_PROJECT_CONFIG_FILE} from ${layer.path}`));
     }
     const projectRoot = projectPath ? computeLayerRoot("project", projectPath) : options.cwd;
-    const allowWorkerPathsOutsideProject = winningLayer.parsed.workerAccess?.allowPathsOutsideProject !== false;
+    const allowWorkerPathsOutsideProject = winningLayer.parsed.workerAccess?.allowPathsOutsideProject === true;
     return {
         status: "project",
         config: mergeLayerConfigs({

@@ -50,7 +50,7 @@ function buildFullScaffold() {
         enabled: true,
         routingMode: "team",
         workerAccess: {
-            allowPathsOutsideProject: true,
+            allowPathsOutsideProject: false,
         },
         display: {
             cost: true,
