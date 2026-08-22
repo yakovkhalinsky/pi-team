@@ -1,4 +1,4 @@
-const FINAL_ANSWER_PATTERN = /<final[_\s-]?answer>([\s\S]*?)<\/final[_\s-]?answer>/i;
+const FINAL_ANSWER_PATTERN = /<final[_\s-]?answer>([\s\S]*?)<\/final[_\s-]?answer>/gi;
 
 function getAssistantText(event) {
   if (typeof event !== "object" || event === null) return undefined;
@@ -37,13 +37,28 @@ function extractLastAssistantText(stdout) {
   return lastText;
 }
 
-export function extractFinalAnswer(text) {
-  const match = FINAL_ANSWER_PATTERN.exec(text);
-  if (match) {
-    const content = match[1]?.trim();
+function extractFinalAnswerFromCleanText(text) {
+  const matches = Array.from(text.matchAll(FINAL_ANSWER_PATTERN));
+  const last = matches.at(-1);
+  if (last) {
+    const content = last[1]?.trim();
     if (content && content.length > 0) return content;
   }
-  return extractLastAssistantText(text);
+  return undefined;
+}
+
+export function extractFinalAnswer(text) {
+  // First try to reconstruct the final assistant message from structured JSONL
+  // events and extract the final-answer block from that clean text. This avoids
+  // matching partial tags inside raw JSON delta streams or example/placeholder
+  // tags from the user's prompt.
+  const lastAssistantText = extractLastAssistantText(text);
+  if (lastAssistantText) {
+    const fromClean = extractFinalAnswerFromCleanText(lastAssistantText);
+    if (fromClean) return fromClean;
+  }
+  // Fallback to scanning the full stdout if no assistant message was parsed.
+  return extractFinalAnswerFromCleanText(text) ?? lastAssistantText;
 }
 
 export function parseFinalAnswerSummaryFields(text) {
