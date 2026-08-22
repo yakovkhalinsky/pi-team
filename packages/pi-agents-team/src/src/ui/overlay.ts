@@ -1,6 +1,8 @@
 import { SelectList, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { buildRosterSections, buildWorkerPrioritySnippet } from "./dashboard.js";
-import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../runtime/final-answer.js";
+import { synthesizeActivity, formatActivityEvent } from "./copy-payload.js";
+import { aggregateWorkerUsage, hasWorkerUsage } from "../usage.js";
+import { formatRetainedTranscript } from "./transcript-retention.js";
 import { formatCacheUsage, formatCompactTokenCount, formatContextBudget } from "./usage-format.js";
 import { formatProfileLabel, formatWorkerStatusLabel, getWorkerAttentionDisplay, getWorkerAttentionPriority, getWorkerPrimaryAction } from "./display-grammar.js";
 import { FRAME, stripAnsi, sanitizeTerminalText, themedPalette, fallbackPalette } from "./theme.js";
@@ -60,6 +62,7 @@ export function setPalette(theme) {
         currentPalette = fallbackPalette;
     }
 }
+const ROSTER_PAGE_SIZE = 30;
 const TAB_ORDER = ["workers", "inspect", "console", "cost"];
 const TAB_LABELS = {
     workers: "Workers",
@@ -79,6 +82,8 @@ function colorForGroupBold(group) {
             return accentBold;
         case "completed_or_idle":
             return successBold;
+        default:
+            return muted;
     }
 }
 
@@ -114,6 +119,155 @@ function firstFitting(width, candidates) {
         }
     }
     return candidates.length > 0 ? truncateToWidth(candidates[candidates.length - 1], width, "…") : "";
+}
+
+function formatTimestamp(ts) {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+}
+
+function styleConsoleEventKind(event) {
+    const label = `[${event.kind}]`;
+    if (event.kind === "error")
+        return dangerBold(label);
+    if (event.kind === "exit" || /\brecover(?:y|ed|ing)?\b/i.test(sanitizeTerminalText(event.text)))
+        return warningBold(label);
+    return dim(label);
+}
+
+function styleConsoleEventText(event) {
+    const text = sanitizeTerminalText(event.text);
+    if (event.kind === "error")
+        return danger(text);
+    if (event.kind === "exit" || /\brecover(?:y|ed|ing)?\b/i.test(text))
+        return warning(text);
+    return text;
+}
+
+function formatConsoleEvent(event) {
+    return `${dim(`[${formatTimestamp(event.ts)}]`)} ${styleConsoleEventKind(event)} ${styleConsoleEventText(event)}`;
+}
+
+function formatUsage(worker) {
+    const parts = [
+        `turns=${worker.usage.turns}`,
+        `in=${formatCompactTokenCount(worker.usage.inputTokens)}`,
+        `out=${formatCompactTokenCount(worker.usage.outputTokens)}`,
+        formatCacheUsage(worker.usage),
+        `cost=$${worker.usage.costUsd.toFixed(4)}`,
+        formatContextBudget(worker.usage),
+    ].filter((part) => Boolean(part));
+    return parts.join("  ");
+}
+
+function hasClampedThinking(worker) {
+    return worker.requestedThinkingLevel !== worker.effectiveThinkingLevel;
+}
+
+function formatThinking(worker, palette) {
+    if (!hasClampedThinking(worker))
+        return worker.effectiveThinkingLevel;
+    return palette.warning(`${worker.requestedThinkingLevel} -> ${worker.effectiveThinkingLevel} (clamped)`);
+}
+
+function compactActivityLine(event) {
+    const label = sanitizeTerminalText(event.label);
+    const command = event.command ? sanitizeTerminalText(event.command) : undefined;
+    const summary = event.summary ? sanitizeTerminalText(event.summary) : undefined;
+    const toolName = event.toolName ? sanitizeTerminalText(event.toolName) : undefined;
+    if (event.actionKind === "command")
+        return `• Ran ${command ?? summary ?? label.replace(/^Ran\s+/, "")}`;
+    if (event.actionKind === "tool")
+        return `• ${label.startsWith("Used ") ? label : `Used ${toolName ?? label}`}`;
+    if (event.actionKind === "process" && summary)
+        return `• ${label}: ${summary}`;
+    if (event.actionKind === "final_summary")
+        return "• Final answer produced";
+    if (event.actionKind === "error" && summary)
+        return `• Error: ${summary}`;
+    return undefined;
+}
+
+function buildRecentActivityRows(worker, transcript, consoleEvents, activityEvents) {
+    const rows = (activityEvents && activityEvents.length > 0 ? activityEvents : synthesizeActivity(worker, consoleEvents ?? []))
+        .map(compactActivityLine)
+        .filter((line) => Boolean(line))
+        .filter((line, index, all) => all.indexOf(line) === index)
+        .slice(-4);
+    const transcriptLines = sanitizeTerminalText(transcript ?? "").trim().split("\n").filter(Boolean);
+    const latestThinking = transcriptLines.length <= 3 ? transcriptLines.slice(-1)[0] : undefined;
+    if (latestThinking && !rows.some((line) => line.includes(latestThinking)))
+        rows.push(`• Thinking: ${latestThinking}`);
+    if (worker.finalAnswer && !rows.includes("• Final answer produced"))
+        rows.push("• Final answer produced");
+    return rows;
+}
+
+function formatInspectStatus(worker, palette) {
+    const label = worker.status;
+    if (worker.status === "completed" || worker.status === "idle")
+        return palette.successBold(label);
+    if (worker.status === "error" || worker.status === "aborted")
+        return palette.dangerBold(label);
+    if (worker.status === "waiting_followup" || worker.status === "starting" || worker.status === "running")
+        return palette.warningBold(label);
+    return palette.muted(label);
+}
+
+function inspectBlockHeader(label, palette, badge) {
+    const suffix = badge ? ` [${badge}]` : "";
+    return `${palette.accent(`${FRAME.topLeft}${FRAME.horizontal} `)}${palette.accentBold(label)}${suffix}${palette.accent(` ${FRAME.horizontal}`)}`;
+}
+
+function inspectBlockFooter(palette) {
+    return palette.accent(`${FRAME.bottomLeft}${FRAME.horizontal}`);
+}
+
+function inspectBlockLine(line, palette, options = {}) {
+    const content = options.structured ? formatStructuredLine(line, classifyTextLine(line).kind) : line;
+    return `${palette.accent(FRAME.vertical)} ${content}`;
+}
+
+function pushInspectBlock(lines, label, body, palette, badge, options = {}) {
+    if (lines.length > 0)
+        lines.push("");
+    lines.push(inspectBlockHeader(label, palette, badge));
+    for (const line of body.length > 0 ? body : ["(none)"])
+        lines.push(inspectBlockLine(line, palette, options));
+    lines.push(inspectBlockFooter(palette));
+}
+
+function pushInspectList(body, label, values, palette) {
+    if (!values || values.length === 0)
+        return;
+    body.push(palette.dim(label));
+    for (const value of values)
+        body.push(`  ${value}`);
+}
+
+function buildRawConsoleLines(worker, chunks, consoleEvents) {
+    if (chunks.length === 0 && consoleEvents.length === 0) {
+        return [`${worker.workerId} · ${worker.profileName} · ${worker.status}`, "", accentBold("— raw —"), "(no console activity yet)"];
+    }
+    const lines = [`${worker.workerId} · ${worker.profileName} · ${worker.status}  ·  chunks=${chunks.length}  events=${consoleEvents.length}  ·  raw`, "", accentBold("— raw —")];
+    const entries = [
+        ...chunks.map((chunk) => ({ ts: chunk.ts, order: chunk.index, lines: [`[raw] assistant chunk #${chunk.index}`, ...sanitizeTerminalText(chunk.text).split("\n")] })),
+        ...consoleEvents.map((event, order) => ({ ts: event.ts, order, lines: sanitizeTerminalText(event.text).split("\n").map((line) => `[raw] ${event.kind} ${line}`) })),
+    ].sort((a, b) => a.ts - b.ts || a.order - b.order);
+    for (const entry of entries)
+        lines.push(...entry.lines);
+    lines.push("", accentBold("— assistant —"));
+    for (const chunk of chunks)
+        lines.push(dim(`[${formatTimestamp(chunk.ts)}]`), ...sanitizeTerminalText(chunk.text).split("\n"));
+    lines.push("", accentBold("— events —"));
+    for (const event of consoleEvents)
+        lines.push(formatConsoleEvent(event));
+    return lines;
+}
+
+function formatCachePart(usage) {
+    const cache = formatCacheUsage(usage);
+    return cache ? `  ${cache}` : "";
 }
 
 
@@ -193,7 +347,7 @@ export function buildInspectText(worker, transcript, consoleEvents, activityEven
 export function buildConsoleLines(worker, chunks, consoleEvents, activityEvents, mode = "activity") {
     if (mode === "raw")
         return buildRawConsoleLines(worker, chunks, consoleEvents);
-    const activity = (activityEvents && activityEvents.length > 0 ? activityEvents : synthesizeActivity(chunks, consoleEvents));
+    const activity = (activityEvents && activityEvents.length > 0 ? activityEvents : synthesizeActivity(worker, consoleEvents));
     if (activity.length === 0) {
         return [`${worker.workerId} · ${worker.profileName} · ${worker.status}`, "", accentBold("— activity —"), dim("(no activity yet — press r for raw logs)")];
     }

@@ -21,7 +21,7 @@ function formatFinalAnswerFields(fields, summary) {
         lines.push(`  Next: ${sanitizeTerminalText(fields.nextRecommendation)}`);
     return lines;
 }
-function formatActivityEvent(event) {
+export function formatActivityEvent(event) {
     const label = sanitizeTerminalText(event.label);
     const commandText = sanitizeTerminalText(event.command ?? event.summary ?? label.replace(/^Ran\s+/, ""));
     const toolName = event.toolName ? sanitizeTerminalText(event.toolName) : undefined;
@@ -57,7 +57,7 @@ function extractToolOutput(text) {
     const stripped = stripHiddenLineCount(output);
     return stripped || undefined;
 }
-function synthesizeActivity(worker, consoleEvents) {
+export function synthesizeActivity(worker, consoleEvents) {
     const activity = [];
     let id = 0;
     const events = consoleEvents ?? [];
