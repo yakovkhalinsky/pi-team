@@ -113,6 +113,8 @@ The Verifier defines a green gate, gathers evidence, and posts a verdict.
 
 The Archivist ensures durable records, decision trails, and updated skills.
 
+> **Note:** Stage 6 is the *recording bucket* — every durable-record entry whose purpose is "what got recorded about this run" groups under this stage. The Archivist owns the bucket conceptually: they enforce the append-only invariant, maintain the durable-record layout, and are the canonical reader/writer. Some Stage-6 entries are written by *other* roles when they have first-hand knowledge of the event (e.g. `[worker-terminal]` and `[worker-relay]` are written by the orchestrator as it observes worker state; `[worker-pruned]` by the Archivist themselves). See `.pi-team/reference/markers.md` for the worker-event marker list. The Archivist does not gate these writes — the role that owns the marker signs it directly.
+
 ### Entry criteria
 - Verifier verdict lands
 
