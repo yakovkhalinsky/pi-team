@@ -96,6 +96,8 @@ The following events from this session do NOT have durable-store entries and wou
 | `[verdict]` | `pi-team-session-2026-08-23` | verifier | Verifier acceptance of v2 (pending) |
 | `[closure]` | `pi-team-session-2026-08-23` | team-lead | Session closure (pending Verifier verdict on Stream B + C) |
 
+The `[verdict]` and `[closure]` markers DID land after the Verifier accepted. See the "Final closure" section below.
+
 The replay script (out of scope for this session) would:
 
 1. Walk this audit log.
@@ -111,4 +113,14 @@ Each entry carries a `supersedes:` field. Today every entry is `supersedes: none
 
 This audit log was authored by `team-lead` retroactively after the recorder was fixed (commit `7e9060e`). The retroactive entries are NOT fabrications — they are reconstructed from the session transcript and the artefacts on disk, with `supersedes: none` because no prior durable entry exists. The dual-write pattern in `docs/plans/orchestrator-memory-discipline.md` §Dual-write pattern documents this fallback.
 
-The closure marker for goal `pi-team-session-2026-08-23` will be recorded once the Verifier accepts Streams B and C. That marker ID will be added here.
+## Final closure
+
+The Verifier (Stream E) accepted with verdict **ship**, recorded as `[verdict]` marker id `e6a19bb6-707a-437d-ab7e-c3aba7dfc77a` (signer: verifier, goal: `pi-team-session-2026-08-23`). The Stage 7 closure was then recorded as `[closure]` marker id `4bedcb84-1cb8-4de8-b99d-07189bead01c` (signer: team-lead, goal: `pi-team-session-2026-08-23`).
+
+The session goal `pi-team-session-2026-08-23` is closed. Three pre-fix events (the early-session `[goal-received]`, `[routing]`, and the v2 prototype's `[action]`) remain as dual-write fallback entries in this audit log. They are not durably stored and would be replayed by `tools/replay-skipped-records.mjs` once that script lands as a follow-up.
+
+Verifier P3 suggestions accepted as follow-ups:
+- Recorder should add one bounded retry on the eden-memory embed-worker handshake flakiness.
+- The session-audit format should split `replay: pending` into a structured field.
+
+Neither is blocking; both are nits / minor improvements.
