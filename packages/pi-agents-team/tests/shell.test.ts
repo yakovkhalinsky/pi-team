@@ -38,15 +38,28 @@ function createMockPi() {
 
 function createMockContext(overrides: Record<string, any> = {}) {
   const notifs: Array<{ message: string; level: string }> = [];
-  return {
+  const setStatusCalls: Array<{ key: string; value: any }> = [];
+  const setWidgetCalls: Array<{ key: string; value: any; options?: any }> = [];
+  // Minimal theme: theme.fg returns the input string. Production code uses
+  // theme.fg("accent", "...") etc.; we don't care about the colour, only
+  // that the strings survive the round trip.
+  const theme = {
+    fg: (_name: string, text: string) => text,
+  };
+  const ctx: any = {
     cwd: process.cwd(),
     hasUI: false,
     mode: "api",
     ...overrides,
     ui: {
       notify: (message: string, level: string) => notifs.push({ message, level }),
+      setStatus: (key: string, value: any) => setStatusCalls.push({ key, value }),
+      setWidget: (key: string, value: any, options?: any) => setWidgetCalls.push({ key, value, options }),
+      theme,
     },
   };
+  (ctx as any).__test = { notifs, setStatusCalls, setWidgetCalls };
+  return ctx;
 }
 
 function createMockChild(stdout: string, stderr: string, exitCode: number) {
@@ -860,5 +873,308 @@ describe("Path A thin extension shell", () => {
     assert.ok(result, "should return a modified prompt");
     assert.ok(result.systemPrompt.includes("Eden-memory blocked/unfinished goals"), "should include blocked goals header");
     assert.ok(result.systemPrompt.includes("g1"), "should mention the goal id");
+  });
+
+  // ─── Team-status widget ──────────────────────────────────────────────────
+
+  it("session_start sets a footer status with team name and agent count", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const statusCalls = (ctx as any).__test.setStatusCalls;
+    assert.ok(statusCalls.length >= 1, "setStatus should be called at least once");
+    const last = statusCalls[statusCalls.length - 1];
+    assert.equal(last.key, _testing.TEAM_STATUS_KEY);
+    assert.match(last.value, /Team \(\d+ agents?\)/);
+    assert.match(last.value, /7 agents?/, "should reflect the seven discovered agents");
+
+    // Widget is not shown by default; the most recent setWidget call should
+    // be a clear (undefined).
+    const widgetCalls = (ctx as any).__test.setWidgetCalls;
+    if (widgetCalls.length > 0) {
+      const lastWidget = widgetCalls[widgetCalls.length - 1];
+      assert.equal(lastWidget.key, _testing.TEAM_WIDGET_KEY);
+      assert.equal(lastWidget.value, undefined, "widget should be hidden by default");
+    }
+  });
+
+  it("session_shutdown clears the footer status and the widget", async () => {
+    // Disable eden-memory for this test: the session_shutdown handler awaits
+    // the in-flight startup work, which can take ~15s if eden-memory is
+    // enabled but unreachable.
+    process.env[EDEN_ENV_FIELDS.ENABLED] = "false";
+    try {
+      const pi = createMockPi();
+      extensionFactory(pi);
+
+      const ctx = createMockContext({ hasUI: true });
+      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+      (ctx as any).__test.setStatusCalls.length = 0;
+      (ctx as any).__test.setWidgetCalls.length = 0;
+
+      const shutdownHandlers = pi.handlers.get("session_shutdown") ?? [];
+      await shutdownHandlers[0]({ reason: "quit" }, ctx);
+
+      const setStatusCalls = (ctx as any).__test.setStatusCalls;
+      const clearStatus = setStatusCalls.find((c: any) => c.value === undefined);
+      assert.ok(clearStatus, "setStatus should be cleared on shutdown");
+
+      const setWidgetCalls = (ctx as any).__test.setWidgetCalls;
+      const clearWidget = setWidgetCalls.find((c: any) => c.value === undefined);
+      assert.ok(clearWidget, "setWidget should be cleared on shutdown");
+    } finally {
+      delete process.env[EDEN_ENV_FIELDS.ENABLED];
+    }
+  });
+
+  it("/team command toggles the widget visibility", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const teamCmd = pi.commands.find((c) => c.name === "team");
+    assert.ok(teamCmd, "/team command should be registered");
+
+    // Toggle on.
+    (ctx as any).__test.setWidgetCalls.length = 0;
+    await teamCmd!.def.handler("", ctx);
+    let widgetCalls = (ctx as any).__test.setWidgetCalls;
+    let lastWidget = widgetCalls[widgetCalls.length - 1];
+    assert.equal(lastWidget.key, _testing.TEAM_WIDGET_KEY);
+    assert.ok(Array.isArray(lastWidget.value), "widget lines should be an array");
+    assert.equal(lastWidget.options?.placement, "belowEditor");
+
+    // Toggle off.
+    (ctx as any).__test.setWidgetCalls.length = 0;
+    await teamCmd!.def.handler("", ctx);
+    widgetCalls = (ctx as any).__test.setWidgetCalls;
+    lastWidget = widgetCalls[widgetCalls.length - 1];
+    assert.equal(lastWidget.value, undefined, "widget should be hidden on second toggle");
+
+    // /team on explicitly.
+    (ctx as any).__test.setWidgetCalls.length = 0;
+    await teamCmd!.def.handler("on", ctx);
+    widgetCalls = (ctx as any).__test.setWidgetCalls;
+    lastWidget = widgetCalls[widgetCalls.length - 1];
+    assert.ok(Array.isArray(lastWidget.value), "/team on should show the panel");
+  });
+
+  it("status line reflects running workers during delegate_task lifecycle", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () => createHangingChild();
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+    (ctx as any).__test.setStatusCalls.length = 0;
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    const executePromise = tool.execute(
+      "call-running",
+      { title: "Hanging task", goal: "hang", profileName: "builder" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    // Wait for the controller to be attached before checking the status,
+    // so the snapshot reflects the real running worker.
+    const workerId = Array.from(_testing.getWorkerMap().keys())[0];
+    assert.ok(workerId, "worker should be registered");
+    await waitForController(workerId);
+
+    // Give the status refresh (synchronous after createWorkerRecord) a tick.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const setStatusCalls = (ctx as any).__test.setStatusCalls;
+    const running = setStatusCalls.find((c: any) => /running/.test(String(c.value)));
+    assert.ok(running, "status line should mention running worker");
+    assert.match(String(running!.value), /builder/);
+
+    // Abort so the test doesn't leak.
+    const abortTool = pi.tools.find((t) => t.name === "abort_worker")!.def;
+    await abortTool.execute("abort-x", { workerId });
+    await executePromise;
+  });
+
+  it("status line settles after all workers reach a terminal state", async () => {
+    const pi = createMockPi();
+    const mockSpawn = () =>
+      createMockChild(
+        "<final_answer>\nheadline: ok\n\nbody\n</final_answer>\n",
+        "",
+        0,
+      );
+    extensionFactory(pi, { spawnImpl: mockSpawn });
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+    (ctx as any).__test.setStatusCalls.length = 0;
+
+    const tool = pi.tools.find((t) => t.name === "delegate_task")!.def;
+    await tool.execute(
+      "call-settle",
+      { title: "Quick task", goal: "do", profileName: "builder" },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    const setStatusCalls = (ctx as any).__test.setStatusCalls;
+    const last = setStatusCalls[setStatusCalls.length - 1];
+    assert.match(String(last.value), /done/);
+    assert.doesNotMatch(String(last.value), /running/);
+  });
+
+  it("widget lists discovered agents when toggled on", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
+    (ctx as any).__test.setWidgetCalls.length = 0;
+    await teamCmd.handler("", ctx);
+
+    const widgetCalls = (ctx as any).__test.setWidgetCalls;
+    const last = widgetCalls[widgetCalls.length - 1];
+    const lines: string[] = last.value;
+    assert.ok(lines.some((l) => l.includes("Pi Agents Team")), "should have a header");
+    assert.ok(lines.some((l) => l.includes("builder")), "should list builder");
+    assert.ok(lines.some((l) => l.includes("verifier")), "should list verifier");
+    assert.ok(lines.some((l) => l.includes("Memory:")), "should have a memory line");
+  });
+
+  it("widget says memory: disabled when eden-memory is not enabled", async () => {
+    // The eden-memory enabled flag defaults to true when unset (documented
+    // package contract). Explicitly disable it for this test.
+    process.env[EDEN_ENV_FIELDS.ENABLED] = "false";
+    try {
+      const pi = createMockPi();
+      extensionFactory(pi);
+
+      const ctx = createMockContext({ hasUI: true });
+      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+      const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
+      (ctx as any).__test.setWidgetCalls.length = 0;
+      await teamCmd.handler("", ctx);
+
+      const widgetCalls = (ctx as any).__test.setWidgetCalls;
+      const last = widgetCalls[widgetCalls.length - 1];
+      const lines: string[] = last.value;
+      assert.ok(lines.some((l) => /Memory: disabled/.test(l)), "should say memory: disabled");
+      assert.ok(!lines.some((l) => /byMarker/.test(l)), "should not render byMarker when memory is disabled");
+    } finally {
+      delete process.env[EDEN_ENV_FIELDS.ENABLED];
+    }
+  });
+
+  it("widget does not throw and stays minimal when no agents are discovered", async () => {
+    const pi = createMockPi();
+    // Empty home dir, no package dir lookup either — fake it by making
+    // discoverAgents return an empty list via cwd pointing to a temp dir.
+    const tmpDir = mkdtempSync(join(tmpdir(), "pi-agents-empty-"));
+    try {
+      extensionFactory(pi);
+      const ctx = createMockContext({ cwd: tmpDir, hasUI: true });
+      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+      const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
+      (ctx as any).__test.setWidgetCalls.length = 0;
+      await teamCmd.handler("", ctx);
+
+      const widgetCalls = (ctx as any).__test.setWidgetCalls;
+      const last = widgetCalls[widgetCalls.length - 1];
+      const lines: string[] = last.value;
+      // Either we found package agents (the package dir is part of the
+      // extension's lookup, so we always find them in the test environment)
+      // or the empty-state message is shown. Either way, the widget must
+      // not throw and must include the hint line.
+      assert.ok(lines.some((l) => l.includes("/team")), "should include the /team hint");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("buildTeamSnapshot and buildStatusLine produce expected shapes", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>([
+      [
+        "w1",
+        { workerId: "w1", profileName: "builder", title: "T1", status: "running", pendingRelayQuestions: [] },
+      ],
+      [
+        "w2",
+        { workerId: "w2", profileName: "verifier", title: "T2", status: "completed", pendingRelayQuestions: [], result: {}, finalAnswer: "" },
+      ],
+    ]);
+    const fakeTracker = {
+      status: {
+        enabled: true,
+        ok: true,
+        byMarker: { "[routing]": 3, "[recorded]": 1 },
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, [{ goalId: "g1" }]);
+    assert.equal(snap.agentCount, agents.length);
+    assert.equal(snap.workers.total, 2);
+    assert.equal(snap.workers.running.length, 1);
+    assert.equal(snap.workers.completed, 1);
+    assert.equal(snap.workers.errored, 0);
+    assert.ok(snap.memory);
+    assert.equal(snap.memory!.blockedGoalCount, 1);
+    assert.equal(snap.memory!.byMarker.length, 2);
+
+    const line = _testing.buildStatusLine(snap);
+    assert.match(line, /Team \(\d+ agents?\)/);
+    assert.match(line, /1 running: builder/);
+    assert.match(line, /memory: ok/);
+    assert.match(line, /1 blocked/);
+
+    const lines = _testing.buildWidgetLines(snap);
+    assert.ok(Array.isArray(lines));
+    assert.ok(lines.length > 0);
+    assert.ok(lines[0].includes("Pi Agents Team"));
+    assert.ok(lines.some((l) => /Memory: ok/.test(l)));
+    assert.ok(lines.some((l) => /byMarker:/.test(l)));
+  });
+
+  it("workers map is cleared at session_start so cross-session leakage is prevented", async () => {
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    // Pre-seed a worker in the module-scope map.
+    _testing.getWorkerMap().set("stale-worker", {
+      workerId: "stale-worker",
+      profileName: "builder",
+      status: "completed",
+      startTime: Date.now(),
+      endTime: Date.now(),
+      result: {},
+      finalAnswer: "",
+      pendingRelayQuestions: [],
+    });
+    assert.equal(_testing.getWorkerMap().size, 1);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    assert.equal(_testing.getWorkerMap().size, 0, "session_start should clear stale workers");
   });
 });

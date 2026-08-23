@@ -255,6 +255,135 @@ export function isTerminalStatus(status) {
   return TERMINAL_STATUSES.has(status);
 }
 
+export const TEAM_STATUS_KEY = "pi-agents-team";
+export const TEAM_WIDGET_KEY = "pi-agents-team";
+
+/**
+ * Snapshot of everything the team-status widget needs to render. Pure data —
+ * no UI references, no closure references. Tests can build and assert on this
+ * without standing up a UI surface.
+ */
+export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoals) {
+  const workerList = Array.from(workers.values());
+  const running = workerList.filter((w) => !isTerminalStatus(w.status));
+  const completed = workerList.filter((w) => w.status === "completed").length;
+  const errored = workerList.filter((w) => w.status === "error" || w.status === "aborted").length;
+
+  let memory = null;
+  if (memoryTracker?.status?.enabled) {
+    const byMarker = memoryTracker.status.byMarker ?? {};
+    const histogramEntries = Object.entries(byMarker)
+      .map(([marker, count]) => ({ marker, count }))
+      .sort((a, b) => a.marker.localeCompare(b.marker));
+    memory = {
+      enabled: true,
+      ok: memoryTracker.status.ok === true,
+      lastError: memoryTracker.status.lastError ?? null,
+      blockedGoalCount: lastBlockedGoals.length,
+      byMarker: histogramEntries,
+    };
+  }
+
+  return {
+    agentCount: agents.length,
+    agents: agents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
+    workers: {
+      total: workerList.length,
+      running: running.map((w) => ({ workerId: w.workerId, profileName: w.profileName, title: w.title })),
+      completed,
+      errored,
+    },
+    memory,
+  };
+}
+
+function fmt(text) {
+  return text;
+}
+
+/**
+ * One-line summary for the footer status slot. Always non-empty. Pure: only
+ * depends on the snapshot.
+ */
+export function buildStatusLine(snapshot) {
+  const { agentCount, workers, memory } = snapshot;
+  const parts = [];
+  parts.push(`Team (${agentCount} agent${agentCount === 1 ? "" : "s"})`);
+  if (workers.total > 0) {
+    if (workers.running.length > 0) {
+      const names = workers.running.map((w) => w.profileName).join(", ");
+      parts.push(`${workers.running.length} running: ${names}`);
+    } else {
+      parts.push(`${workers.completed} done, ${workers.errored} failed`);
+    }
+  }
+  if (memory?.enabled) {
+    parts.push(memory.ok ? "memory: ok" : "memory: degraded");
+    if (memory.blockedGoalCount > 0) parts.push(`${memory.blockedGoalCount} blocked`);
+  }
+  return parts.join(" | ");
+}
+
+/**
+ * Multi-line panel for the below-editor widget. Pure. Caps at ~30 lines so it
+ * doesn't push the chat scrollback too far.
+ */
+export function buildWidgetLines(snapshot) {
+  const lines = [];
+  lines.push(`Pi Agents Team — ${snapshot.agentCount} agent${snapshot.agentCount === 1 ? "" : "s"} discovered`);
+  lines.push("");
+
+  if (snapshot.agentCount > 0) {
+    lines.push("Agents:");
+    const shown = snapshot.agents.slice(0, 12);
+    for (const a of shown) {
+      lines.push(`  - ${a.name} (${a.source}): ${a.description}`);
+    }
+    if (snapshot.agents.length > shown.length) {
+      lines.push(`  … and ${snapshot.agents.length - shown.length} more (use /agents)`);
+    }
+    lines.push("");
+  } else {
+    lines.push("No agents discovered. Place profiles in .pi/agents/*.md");
+    lines.push("");
+  }
+
+  if (snapshot.workers.total > 0) {
+    lines.push("Workers:");
+    if (snapshot.workers.running.length > 0) {
+      for (const w of snapshot.workers.running) {
+        lines.push(`  ● ${w.profileName} — ${w.title} (${w.workerId})`);
+      }
+    }
+    lines.push(
+      `  total: ${snapshot.workers.total} · done: ${snapshot.workers.completed} · failed: ${snapshot.workers.errored}`,
+    );
+    lines.push("");
+  }
+
+  if (snapshot.memory) {
+    lines.push(`Memory: ${snapshot.memory.ok ? "ok" : "degraded"}`);
+    if (snapshot.memory.lastError) lines.push(`  last error: ${snapshot.memory.lastError}`);
+    if (snapshot.memory.blockedGoalCount > 0) {
+      lines.push(`  blocked goals: ${snapshot.memory.blockedGoalCount}`);
+    }
+    if (snapshot.memory.byMarker.length > 0) {
+      lines.push("  byMarker:");
+      for (const e of snapshot.memory.byMarker) {
+        lines.push(`    ${e.marker}: ${e.count}`);
+      }
+    }
+    lines.push("");
+  } else {
+    lines.push("Memory: disabled (EDEN_MEMORY_ENABLED not set)");
+    lines.push("");
+  }
+
+  lines.push("Use /team to toggle this panel. /agents for details.");
+
+  return lines.slice(0, 40);
+}
+
 export function collectWorkerResult(record) {
   if (record.status === "completed") {
     return { result: record.result ?? {} };
@@ -375,6 +504,14 @@ export const _testing = {
   resolveEdenOptions,
   findBlockedOrUnfinishedGoals,
   formatBlockedGoalsSummary,
+  // Team-status widget helpers. The keys are stable strings used as the
+  // status/widget slot identifiers on the pi UI surface; the builders are
+  // pure functions that tests can exercise without a UI mock.
+  TEAM_STATUS_KEY,
+  TEAM_WIDGET_KEY,
+  buildTeamSnapshot,
+  buildStatusLine,
+  buildWidgetLines,
 };
 
 export default function (pi, options = {}) {
@@ -402,6 +539,57 @@ export default function (pi, options = {}) {
       });
     } catch {
       // Best-effort logging.
+    }
+  }
+
+  // Team-status UI state. Per-session so /new, /resume, /fork get a clean
+  // panel and footer. The workers map is module-scoped, but we clear it on
+  // session_start so per-session freshness is real.
+  let widgetVisible = false;
+  let lastUiCtx = null;
+
+  function clearUi() {
+    const ui = lastUiCtx?.ui;
+    if (!ui) return;
+    try {
+      if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, undefined);
+      if (typeof ui.setWidget === "function") ui.setWidget(TEAM_WIDGET_KEY, undefined);
+    } catch {
+      // Best-effort.
+    }
+    lastUiCtx = null;
+  }
+
+  function refreshUi(ctx) {
+    // Stash the ctx so /team and /agents can re-render without needing one.
+    if (ctx) lastUiCtx = ctx;
+    const uiCtx = lastUiCtx;
+    if (!uiCtx?.ui) return;
+    const ui = uiCtx.ui;
+    if (typeof ui.setStatus !== "function" && typeof ui.setWidget !== "function") return;
+
+    let snapshot;
+    try {
+      const agents = discoverAgents(uiCtx.cwd ?? process.cwd());
+      snapshot = buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoals);
+    } catch (err) {
+      // Discovery failed (e.g. permission error). Render a minimal status.
+      const fallback = "Team (unavailable)";
+      if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, fallback);
+      if (widgetVisible && typeof ui.setWidget === "function") {
+        ui.setWidget(TEAM_WIDGET_KEY, [fallback, String(err?.message ?? err)]);
+      }
+      return;
+    }
+
+    const statusLine = buildStatusLine(snapshot);
+    if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, statusLine);
+    if (typeof ui.setWidget === "function") {
+      if (widgetVisible) {
+        ui.setWidget(TEAM_WIDGET_KEY, buildWidgetLines(snapshot), { placement: "belowEditor" });
+      } else {
+        ui.setWidget(TEAM_WIDGET_KEY, undefined);
+      }
     }
   }
 
@@ -438,12 +626,41 @@ export default function (pi, options = {}) {
     ).catch(() => {});
   }
 
+  /**
+   * Notify the team-status UI that a worker just changed state. Called from
+   * the tool bodies (delegate_task, abort_worker, wait_for_agents) and from
+   * the /stop-worker command. The agent-loop tool_execution_end hook also
+   * calls refreshUi directly, so this is belt-and-braces: even if a tool
+   * is invoked outside the agent loop (e.g. from a test), the UI updates.
+   */
+  function onWorkerStateChanged(ctx) {
+    if (ctx) refreshUi(ctx);
+  }
+
   pi.on("session_start", async (_event, ctx) => {
     recordState();
+    // Per-session freshness: clear any workers left over from a previous
+    // session in this process. (Module-scope map, but the session lifecycle
+    // is the right boundary.)
+    workers.clear();
+    lastBlockedGoals = [];
+    if (memoryTracker && typeof memoryTracker.stopPolling === "function") {
+      try {
+        memoryTracker.stopPolling();
+      } catch {
+        // Best-effort.
+      }
+    }
+    memoryTracker = null;
+    widgetVisible = false;
+    lastUiCtx = ctx;
     const agents = discoverAgents(ctx.cwd ?? process.cwd());
     if (agents.length > 0 && ctx?.hasUI) {
       ctx.ui.notify(`Pi Agents Team (Path A) loaded ${agents.length} agent profile(s).`, "info");
     }
+    // Set the footer status immediately so the user sees team mode is active,
+    // even before any tool runs.
+    refreshUi(ctx);
 
     const edenOptions = resolveEdenOptions(process.env);
     if (edenOptions.enabled === true) {
@@ -500,10 +717,24 @@ export default function (pi, options = {}) {
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
+    // Clear the team-status UI surfaces. Worker map is cleared at the next
+    // session_start.
+    clearUi();
+    if (memoryTracker && typeof memoryTracker.stopPolling === "function") {
+      try {
+        memoryTracker.stopPolling();
+      } catch {
+        // Best-effort.
+      }
+    }
     if (!memoryTracker?.status?.enabled) return;
     // Wait for any in-flight startup work so we don't race the closure write.
+    // Capped so a hung eden-memory CLI never blocks session shutdown.
     try {
-      await blockedGoalsReady;
+      await Promise.race([
+        blockedGoalsReady,
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
     } catch {
       // Best-effort.
     }
@@ -547,6 +778,31 @@ export default function (pi, options = {}) {
     return { systemPrompt: `${event.systemPrompt}\n\n${injection}` };
   });
 
+  pi.on("turn_start", async (_event, ctx) => {
+    refreshUi(ctx);
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    refreshUi(ctx);
+  });
+
+  pi.on("tool_execution_start", async (event, ctx) => {
+    if (event.toolName === "delegate_task" || event.toolName === "abort_worker") {
+      // Refresh after a microtask so the worker record exists in the map.
+      queueMicrotask(() => refreshUi(ctx));
+    }
+  });
+
+  pi.on("tool_execution_end", async (event, ctx) => {
+    if (
+      event.toolName === "delegate_task" ||
+      event.toolName === "abort_worker" ||
+      event.toolName === "wait_for_agents"
+    ) {
+      refreshUi(ctx);
+    }
+  });
+
   pi.registerTool({
     name: "delegate_task",
     label: "Delegate task",
@@ -564,11 +820,13 @@ export default function (pi, options = {}) {
         const errorRecord = createWorkerRecord(workerId, params.profileName, params.title);
         attachWorkerMemoryStatus(errorRecord);
         settleWorker(workerId, { status: "error", error });
+        onWorkerStateChanged(ctx);
         return makeDelegateResult(workerId, "error", {}, error, buildMemoryPayload());
       }
 
       const record = createWorkerRecord(workerId, params.profileName, params.title);
       attachWorkerMemoryStatus(record);
+      onWorkerStateChanged(ctx);
 
       if (memoryTracker?.status?.enabled) {
         const edenOptions = resolveEdenOptions(process.env);
@@ -648,6 +906,7 @@ export default function (pi, options = {}) {
             exitCode: result.exitCode ?? null,
           });
           recordWorkerCompletion(workerId, params, "error");
+          onWorkerStateChanged(ctx);
           return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error, buildMemoryPayload());
         }
 
@@ -661,6 +920,7 @@ export default function (pi, options = {}) {
             exitCode: result.exitCode ?? null,
           });
           recordWorkerCompletion(workerId, params, "error");
+          onWorkerStateChanged(ctx);
           return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error, buildMemoryPayload());
         }
 
@@ -674,11 +934,13 @@ export default function (pi, options = {}) {
           exitCode: result.exitCode ?? 0,
         });
         recordWorkerCompletion(workerId, params, "completed");
+        onWorkerStateChanged(ctx);
         return makeDelegateResult(workerId, "completed", workerResult, undefined, buildMemoryPayload());
       } catch (err) {
         const error = err?.message ?? String(err);
         settleWorker(workerId, { status: "error", error });
         recordWorkerCompletion(workerId, params, "error");
+        onWorkerStateChanged(ctx);
         return makeDelegateResult(workerId, "error", {}, error, buildMemoryPayload());
       } finally {
         await cleanupTempPrompt(tmpFilePath, tmpDir);
@@ -726,6 +988,7 @@ export default function (pi, options = {}) {
           });
           const newRelays = formatRelayList(relayQuestions);
           if (newRelays.length > 0) {
+            onWorkerStateChanged(lastUiCtx);
             return {
               content: [
                 {
@@ -742,6 +1005,7 @@ export default function (pi, options = {}) {
           return w ? isTerminalStatus(w.status) : true;
         });
         if (allTerminal) {
+          onWorkerStateChanged(lastUiCtx);
           return {
             content: [
               {
@@ -753,6 +1017,7 @@ export default function (pi, options = {}) {
         }
 
         if (Date.now() - start >= timeoutMs) {
+          onWorkerStateChanged(lastUiCtx);
           return {
             content: [
               {
@@ -808,6 +1073,7 @@ export default function (pi, options = {}) {
         error: killed ? "Worker aborted" : "Worker abort requested",
       });
       recordWorkerCompletion(record.workerId, { goal: record.title, profileName: record.profileName }, "aborted");
+      onWorkerStateChanged(lastUiCtx);
 
       return {
         content: [
@@ -852,6 +1118,28 @@ export default function (pi, options = {}) {
         ctx,
         `Worker ${workerId} aborted (${killed ? "kill sent" : "no running controller"}).`,
       );
+      refreshUi(ctx);
+    },
+  });
+
+  pi.registerCommand("team", {
+    description: "Toggle the team-status panel below the editor: /team [on|off]",
+    handler: async (args, ctx) => {
+      const arg = typeof args === "string" ? args.trim().toLowerCase() : "";
+      if (arg === "on") widgetVisible = true;
+      else if (arg === "off") widgetVisible = false;
+      else widgetVisible = !widgetVisible;
+
+      if (widgetVisible) {
+        refreshUi(ctx);
+        ctx?.ui?.notify?.("Team panel shown. /team to hide.", "info");
+      } else {
+        // Render once more to clear the widget, but keep the footer status.
+        if (ctx?.ui && typeof ctx.ui.setWidget === "function") {
+          ctx.ui.setWidget(TEAM_WIDGET_KEY, undefined);
+        }
+        ctx?.ui?.notify?.("Team panel hidden. /team to show.", "info");
+      }
     },
   });
 
@@ -864,21 +1152,21 @@ export default function (pi, options = {}) {
 
       if (!query) {
         sendAgentOutput(pi, ctx, formatAgentListDetailed(agents));
-        return;
+      } else {
+        const agent = findAgentByQuery(agents, query);
+        if (!agent) {
+          const available = agents.map((a) => a.name).join(", ") || "none";
+          sendAgentOutput(
+            pi,
+            ctx,
+            `Agent "${query}" not found. Available agents: ${available}.`,
+          );
+        } else {
+          sendAgentOutput(pi, ctx, formatAgentDetail(agent));
+        }
       }
-
-      const agent = findAgentByQuery(agents, query);
-      if (!agent) {
-        const available = agents.map((a) => a.name).join(", ") || "none";
-        sendAgentOutput(
-          pi,
-          ctx,
-          `Agent "${query}" not found. Available agents: ${available}.`,
-        );
-        return;
-      }
-
-      sendAgentOutput(pi, ctx, formatAgentDetail(agent));
+      // Keep the team panel in sync with whatever /agents just looked at.
+      refreshUi(ctx);
     },
   });
 

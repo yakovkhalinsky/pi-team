@@ -1,0 +1,26 @@
+# Bugs
+
+Reports for known issues in this repo, tracked here so they can be picked up and
+fixed in batches. Each bug lives in its own file with a stable id, reproduction
+steps, and a proposed fix direction. Use the id when referencing a bug in
+commits or PRs.
+
+## Index
+
+| ID | Title | Severity | Status |
+|---|---|---|---|
+| [BUG-001](./BUG-001-extension-build-leaks-ts-into-js.md) | Extension build emits TypeScript-only syntax into `.js` output; runtime parse error in pi | High — extension is non-functional | Fixed (`7034f59`) |
+| [BUG-002](./BUG-002-installer-pulls-from-public-npm-registry.md) | `install.sh` installs the public npm `pi-agents-team` (a different upstream package) instead of the local source | High — wrong code shipped into user projects | Fixed (commit pending) |
+
+## Severity rubric
+
+- **High** — the project is non-functional, ships wrong code, or corrupts state.
+- **Medium** — the project works but with degraded behaviour or visible warnings.
+- **Low** — cosmetic, doc, or nice-to-have.
+
+## Conventions
+
+- Each bug file uses the template below.
+- Keep the **Reproduction** section runnable from a clean clone.
+- Mark **Status** as `Open`, `In Progress`, `Fixed`, or `Wontfix`.
+- When fixed, link the closing commit in the file's footer.

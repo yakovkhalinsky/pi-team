@@ -50,7 +50,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node scripts/typecheck.mjs",
-    "test": "node --import tsx --test \"tests/**/*.test.ts\"",
+    "test": "node --import tsx --test --test-force-exit \"tests/**/*.test.ts\"",
     "check": "npm run build && npm run typecheck && npm test"
   },
   "pi": {
