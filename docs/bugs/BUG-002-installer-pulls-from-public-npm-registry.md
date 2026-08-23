@@ -2,8 +2,12 @@
 
 **Severity:** High — wrong code is shipped into every user project.
 
-**Status:** Fixed (installer patch pending commit; functional behaviour
-verified against a fresh target)
+**Status:** Open — the fix described below was developed and verified
+locally in an earlier session, but the corresponding code change to
+`install.sh` was never committed. The current `install.sh` still calls
+`pi install -l npm:pi-agents-team`, which is the buggy behaviour.
+The bug file documents the planned fix so a future commit can land
+it without re-deriving the design.
 
 **Component:** `install.sh`
 

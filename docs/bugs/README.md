@@ -10,7 +10,9 @@ commits or PRs.
 | ID | Title | Severity | Status |
 |---|---|---|---|
 | [BUG-001](./BUG-001-extension-build-leaks-ts-into-js.md) | Extension build emits TypeScript-only syntax into `.js` output; runtime parse error in pi | High — extension is non-functional | Fixed (`7034f59`) |
-| [BUG-002](./BUG-002-installer-pulls-from-public-npm-registry.md) | `install.sh` installs the public npm `pi-agents-team` (a different upstream package) instead of the local source | High — wrong code shipped into user projects | Fixed (commit pending) |
+| [BUG-002](./BUG-002-installer-pulls-from-public-npm-registry.md) | `install.sh` installs the public npm `pi-agents-team` (a different upstream package) instead of the local source | High — wrong code shipped into user projects | Open — fix designed but not committed |
+| [BUG-003](./BUG-003-test-runner-open-handle-leak.md) | `npm test` hangs for ~25s after printing the summary because of an open handle; `--test-force-exit` masks it | Medium — slow CI; future leaks will be invisible | Open |
+| [BUG-004](./BUG-004-team-widget-visual-not-verified-in-tui.md) | Team-status widget contents are unit-tested but the rendered TUI appearance has not been visually verified | Low — data is correct, visual is unverified | Open |
 
 ## Severity rubric
 
