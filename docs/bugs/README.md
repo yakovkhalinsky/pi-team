@@ -13,6 +13,7 @@ commits or PRs.
 | [BUG-002](./BUG-002-installer-pulls-from-public-npm-registry.md) | `install.sh` installs the public npm `pi-agents-team` (a different upstream package) instead of the local source | High — wrong code shipped into user projects | Open — fix designed but not committed |
 | [BUG-003](./BUG-003-test-runner-open-handle-leak.md) | `npm test` hangs for ~25s after printing the summary because of an open handle; `--test-force-exit` masks it | Medium — slow CI; future leaks will be invisible | Open |
 | [BUG-004](./BUG-004-team-widget-visual-not-verified-in-tui.md) | Team-status widget contents are unit-tested but the rendered TUI appearance has not been visually verified | Low — data is correct, visual is unverified | Open |
+| [BUG-005](./BUG-005-discover-agents-includes-user-scope-main.md) | `discoverAgents` includes user-scope `~/.pi/agent/agents/*.md`; orchestrator sees 7 agents (incl. default `main`) instead of 6 pi-team roles | Medium — wrong team size in widget, system prompt, `/agents`, and `delegate_task` validation | Open — fix designed but deferred |
 
 ## Severity rubric
 
