@@ -2,12 +2,18 @@
 
 **Severity:** High — wrong code is shipped into every user project.
 
-**Status:** Open — the fix described below was developed and verified
-locally in an earlier session, but the corresponding code change to
-`install.sh` was never committed. The current `install.sh` still calls
-`pi install -l npm:pi-agents-team`, which is the buggy behaviour.
-The bug file documents the planned fix so a future commit can land
-it without re-deriving the design.
+**Status:** Fixed (`f7914be`). Verified end-to-end on 2026-08-23:
+`bash install.sh` against `/tmp/bug002-verify` produces
+`.pi/settings.json` with the local path
+`../../../home/yakov/git/pi-team/packages/pi-agents-team`, and `pi -p`
+confirms the 6 pi-team roles load (no `main`, no upstream package).
+
+**Follow-up:** `packages/pi-agents-team/README.md` still documents
+`pi install npm:pi-agents-team` as the install command, which would
+re-introduce the bug if followed from the package's own README. Tracked
+to be addressed when this file is next refreshed — does not block
+closing BUG-002 because it is a documentation leftover, not a code path
+the installer uses.
 
 **Component:** `install.sh`
 
@@ -150,3 +156,8 @@ note below.
 ## Files changed
 
 - `install.sh` — Step 3 (extension install) and the help/usage text.
+
+## Closing commit
+
+[`f7914be`](https://github.com/yakovkhalinsky/pi-team/commit/f7914be) —
+`fix(install): install local extension source, not public npm package`.
