@@ -1,3 +1,9 @@
+/**
+ * Type declarations for atp-markers.ts. The runtime is plain JavaScript; this
+ * file carries the type annotations that consumers (TypeScript callers and
+ * jiti-loaded extensions) can rely on.
+ */
+
 export type AtpStage =
   | "goal-receipt"
   | "routing"

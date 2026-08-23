@@ -1,3 +1,8 @@
+/**
+ * Type declarations for memory-status.ts. The runtime is plain JavaScript;
+ * this file carries the type annotations for consumers.
+ */
+
 import type { AtpMarkerName } from "./atp-markers.js";
 
 export interface MarkerBucket {
@@ -68,14 +73,6 @@ export interface EdenMemoryAggregateStatus {
   totals: MarkerBucket;
 }
 
-export interface MemoryStatusTracker {
-  status: EdenMemoryStatus;
-  updateFromWriteResult(result: EdenMemoryWriteResult): void;
-  updateFromHealthResult(result: EdenMemoryHealthResult): void;
-  startPolling(): void;
-  stopPolling(): void;
-}
-
 export interface MemoryStatusTrackerOptions {
   enabled: boolean;
   health?: (
@@ -86,6 +83,14 @@ export interface MemoryStatusTrackerOptions {
   edenOptions?: Record<string, unknown>;
   healthIntervalMs?: number;
   healthTimeoutMs?: number;
+}
+
+export interface MemoryStatusTracker {
+  status: EdenMemoryStatus;
+  updateFromWriteResult(result: EdenMemoryWriteResult): void;
+  updateFromHealthResult(result: EdenMemoryHealthResult): void;
+  startPolling(): void;
+  stopPolling(): void;
 }
 
 export declare function createMemoryStatusTracker(options: MemoryStatusTrackerOptions): MemoryStatusTracker;

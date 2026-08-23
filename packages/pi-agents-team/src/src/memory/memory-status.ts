@@ -13,17 +13,21 @@
  *     counts and last-write timestamps, so the orchestrator can see whether
  *     the lifecycle actually completed.
  *   - No duplicate `recordCount` field; the three counters sum to the total.
+ *
+ * NOTE: This file is shipped as plain JavaScript (the build script copies
+ * .ts -> .js verbatim). Type annotations live in memory-status.d.ts. Do not
+ * introduce TypeScript syntax here that Node cannot parse.
  */
 
-import { ATP_MARKERS_BY_NAME, type AtpMarkerName } from "./atp-markers.js";
+import { ATP_MARKERS_BY_NAME } from "./atp-markers.js";
 
 const MAX_EVENT_HISTORY = 8;
 
-function nowMs(): number {
+function nowMs() {
   return Date.now();
 }
 
-function normalizeError(result: { error?: unknown }): string | undefined {
+function normalizeError(result) {
   if (result.error === undefined || result.error === null) return undefined;
   if (typeof result.error === "string") return result.error.trim() || undefined;
   if (result.error instanceof Error) return result.error.message.trim() || undefined;
@@ -34,70 +38,13 @@ function normalizeError(result: { error?: unknown }): string | undefined {
   }
 }
 
-export interface MarkerBucket {
-  ok: number;
-  error: number;
-  skipped: number;
-  lastTs?: number;
-}
-
-export interface EdenMemoryEvent {
-  markerName: AtpMarkerName;
-  ok: boolean;
-  error?: string;
-  memoryId?: string;
-  ts: number;
-}
-
-export interface EdenMemoryMarkerResult {
-  markerName: AtpMarkerName;
-  ok: boolean;
-  error?: string;
-  memoryId?: string;
-  goalId?: string;
-  taskId?: string;
-  ts?: number;
-  skipped?: boolean;
-}
-
-export interface EdenMemoryWriteResult {
-  ok: boolean;
-  id?: string;
-  error?: string;
-}
-
-export interface EdenMemoryHealthResult {
-  ok: boolean;
-  locked?: boolean;
-  error?: string;
-}
-
-export interface EdenMemoryStatus {
-  enabled: boolean;
-  healthy: boolean | undefined;
-  locked: boolean;
-  recordsWritten: number;
-  recordsFailed: number;
-  recordsSkipped: number;
-  lastError: string | undefined;
-  lastHealthCheckAt: number | undefined;
-  lastWriteAt: number | undefined;
-  lastMarkerName?: AtpMarkerName;
-  lastResult?: "ok" | "skipped" | "error";
-  goalMemoryIds?: string[];
-  taskMemoryIds?: string[];
-  eventHistory?: EdenMemoryEvent[];
-  /** Per-marker histogram. Keys are marker names from the canonical table. */
-  byMarker?: Partial<Record<AtpMarkerName, MarkerBucket>>;
-}
-
 /**
  * Initial empty bucket for every marker in the canonical table. UI consumers
  * can rely on `byMarker[marker]` being defined for every marker name.
  */
-function emptyByMarker(): Partial<Record<AtpMarkerName, MarkerBucket>> {
-  const out: Partial<Record<AtpMarkerName, MarkerBucket>> = {};
-  for (const name of Object.keys(ATP_MARKERS_BY_NAME) as AtpMarkerName[]) {
+function emptyByMarker() {
+  const out = Object.create(null);
+  for (const name of Object.keys(ATP_MARKERS_BY_NAME)) {
     out[name] = { ok: 0, error: 0, skipped: 0 };
   }
   return out;
@@ -108,7 +55,7 @@ function emptyByMarker(): Partial<Record<AtpMarkerName, MarkerBucket>> {
  * Callers may mutate this object directly; the ATP recorder updates it
  * in place as lifecycle markers are written.
  */
-export function createWorkerEdenMemoryStatus(enabled: boolean): EdenMemoryStatus {
+export function createWorkerEdenMemoryStatus(enabled) {
   return {
     enabled,
     healthy: undefined,
@@ -127,10 +74,7 @@ export function createWorkerEdenMemoryStatus(enabled: boolean): EdenMemoryStatus
  * Ensure a worker state carries an enabled eden-memory status when memory
  * is configured. Safe to call repeatedly; preserves an existing enabled status.
  */
-export function ensureWorkerEdenMemoryStatus(
-  worker: { edenMemoryStatus?: EdenMemoryStatus },
-  config: { memory?: { edenMemory?: { enabled?: boolean } } } | undefined,
-): void {
+export function ensureWorkerEdenMemoryStatus(worker, config) {
   const enabled = config?.memory?.edenMemory?.enabled === true;
   if (!enabled) return;
   if (!worker.edenMemoryStatus || worker.edenMemoryStatus.enabled !== true) {
@@ -145,26 +89,8 @@ export function ensureWorkerEdenMemoryStatus(
  * calls it and updates status.healthy / status.locked. Call stopPolling()
  * before teardown to release the timer.
  */
-export function createMemoryStatusTracker(
-  options: {
-    enabled: boolean;
-    health?: (
-      options?: Record<string, unknown>,
-      signal?: AbortSignal,
-      timeoutMs?: number,
-    ) => Promise<EdenMemoryHealthResult>;
-    edenOptions?: Record<string, unknown>;
-    healthIntervalMs?: number;
-    healthTimeoutMs?: number;
-  },
-): {
-  status: EdenMemoryStatus;
-  updateFromWriteResult: (result: EdenMemoryWriteResult) => void;
-  updateFromHealthResult: (result: EdenMemoryHealthResult) => void;
-  startPolling: () => void;
-  stopPolling: () => void;
-} {
-  const status: EdenMemoryStatus = {
+export function createMemoryStatusTracker(options) {
+  const status = {
     enabled: options.enabled,
     healthy: undefined,
     locked: false,
@@ -177,10 +103,10 @@ export function createMemoryStatusTracker(
     byMarker: options.enabled ? emptyByMarker() : undefined,
   };
 
-  let timer: NodeJS.Timeout | undefined;
+  let timer;
   let runningHealthCheck = false;
 
-  function updateFromWriteResult(result: EdenMemoryWriteResult): void {
+  function updateFromWriteResult(result) {
     status.lastWriteAt = nowMs();
     if (result.ok) {
       status.recordsWritten += 1;
@@ -190,7 +116,7 @@ export function createMemoryStatusTracker(
     status.lastError = normalizeError(result);
   }
 
-  function updateFromHealthResult(result: EdenMemoryHealthResult): void {
+  function updateFromHealthResult(result) {
     status.lastHealthCheckAt = nowMs();
     status.healthy = result.ok && !result.locked;
     status.locked = result.locked === true;
@@ -201,12 +127,12 @@ export function createMemoryStatusTracker(
     }
   }
 
-  async function runHealthCheck(): Promise<void> {
+  async function runHealthCheck() {
     if (!options.enabled || !options.health || runningHealthCheck) return;
     runningHealthCheck = true;
     try {
       const timeoutMs = options.healthTimeoutMs ?? 10_000;
-      const timeout = new Promise<never>((_, reject) => {
+      const timeout = new Promise((_, reject) => {
         const id = setTimeout(
           () => reject(new Error(`Eden-memory health check timed out after ${timeoutMs}ms`)),
           timeoutMs,
@@ -228,7 +154,7 @@ export function createMemoryStatusTracker(
     }
   }
 
-  function startPolling(): void {
+  function startPolling() {
     if (timer || !options.enabled || !options.health) return;
     void runHealthCheck();
     timer = setInterval(() => {
@@ -237,7 +163,7 @@ export function createMemoryStatusTracker(
     if (typeof timer.unref === "function") timer.unref();
   }
 
-  function stopPolling(): void {
+  function stopPolling() {
     if (!timer) return;
     clearInterval(timer);
     timer = undefined;
@@ -252,7 +178,7 @@ export function createMemoryStatusTracker(
  * Severity order (highest priority first):
  *   locked → error → warning (last error) → skipped (last write) → ok → unknown
  */
-export function getMemoryStatusGlyph(status: EdenMemoryStatus | undefined): string {
+export function getMemoryStatusGlyph(status) {
   if (!status || !status.enabled) return "";
   if (status.locked) return "🔒";
   if (status.healthy === false) return "✗";
@@ -267,10 +193,10 @@ export function getMemoryStatusGlyph(status: EdenMemoryStatus | undefined): stri
  * Short human-readable memory status fragment for wider UI surfaces.
  * Never includes record content.
  */
-export function formatMemoryStatusFragment(status: EdenMemoryStatus | undefined): string {
+export function formatMemoryStatusFragment(status) {
   if (!status || !status.enabled) return "";
   const glyph = getMemoryStatusGlyph(status);
-  const parts: string[] = [];
+  const parts = [];
   if (status.locked) parts.push("locked");
   else if (status.healthy === false) parts.push("unhealthy");
   else if (status.lastResult === "skipped") parts.push(`${status.recordsSkipped} skipped`);
@@ -285,13 +211,10 @@ export function formatMemoryStatusFragment(status: EdenMemoryStatus | undefined)
  * Mutates the supplied status in place, updating the per-marker histogram and
  * derived counters. Safe to call with undefined/disabled status.
  */
-export function recordEdenMemoryMarker(
-  status: EdenMemoryStatus | undefined,
-  result: EdenMemoryMarkerResult,
-): void {
+export function recordEdenMemoryMarker(status, result) {
   if (!status || !status.enabled) return;
   const ts = result.ts ?? nowMs();
-  const event: EdenMemoryEvent = {
+  const event = {
     markerName: result.markerName,
     ok: result.ok,
     error: result.error,
@@ -306,11 +229,12 @@ export function recordEdenMemoryMarker(
 
   // Per-marker histogram. Buckets are pre-initialised in
   // emptyByMarker() so this is always safe.
-  const bucket = (status.byMarker ?? (status.byMarker = emptyByMarker()))[result.markerName] ??= {
+  status.byMarker = status.byMarker ?? emptyByMarker();
+  const bucket = status.byMarker[result.markerName] ?? (status.byMarker[result.markerName] = {
     ok: 0,
     error: 0,
     skipped: 0,
-  };
+  });
   bucket.lastTs = ts;
   if (result.skipped) bucket.skipped += 1;
   else if (result.ok) bucket.ok += 1;
@@ -346,7 +270,7 @@ export function recordEdenMemoryMarker(
 /**
  * Format one ATP event as a short, content-free line for activity timelines.
  */
-export function formatEdenMemoryEvent(event: EdenMemoryEvent): string {
+export function formatEdenMemoryEvent(event) {
   const glyph = event.ok ? "✓" : "✗";
   return `${glyph} ${event.markerName}`;
 }
@@ -359,23 +283,8 @@ export function formatEdenMemoryEvent(event: EdenMemoryEvent): string {
  * The aggregate carries a per-marker histogram so the orchestrator can see
  * which lifecycle markers actually landed.
  */
-export interface EdenMemoryAggregateStatus {
-  enabled: true;
-  recordsWritten: number;
-  recordsFailed: number;
-  recordsSkipped: number;
-  locked: boolean;
-  healthy: boolean | undefined;
-  lastError: string | undefined;
-  byMarker: Partial<Record<AtpMarkerName, MarkerBucket>>;
-  totals: { ok: number; error: number; skipped: number; lastTs?: number };
-}
-
-export function aggregateEdenMemoryStatus(
-  teamStatus: EdenMemoryStatus | undefined,
-  workers: { edenMemoryStatus?: EdenMemoryStatus }[] | undefined,
-): EdenMemoryAggregateStatus | undefined {
-  const statuses: EdenMemoryStatus[] = [];
+export function aggregateEdenMemoryStatus(teamStatus, workers) {
+  const statuses = [];
   if (teamStatus && teamStatus.enabled) statuses.push(teamStatus);
   for (const worker of workers ?? []) {
     if (worker.edenMemoryStatus && worker.edenMemoryStatus.enabled) {
@@ -384,12 +293,12 @@ export function aggregateEdenMemoryStatus(
   }
   if (statuses.length === 0) return undefined;
 
-  const byMarker: Partial<Record<AtpMarkerName, MarkerBucket>> = emptyByMarker();
-  const totals: MarkerBucket = { ok: 0, error: 0, skipped: 0 };
+  const byMarker = emptyByMarker();
+  const totals = { ok: 0, error: 0, skipped: 0 };
 
   for (const s of statuses) {
-    for (const [name, bucket] of Object.entries(s.byMarker ?? {}) as [AtpMarkerName, MarkerBucket][]) {
-      const target = byMarker[name]!;
+    for (const [name, bucket] of Object.entries(s.byMarker ?? {})) {
+      const target = byMarker[name];
       target.ok += bucket.ok;
       target.error += bucket.error;
       target.skipped += bucket.skipped;
@@ -398,7 +307,7 @@ export function aggregateEdenMemoryStatus(
       }
     }
   }
-  for (const bucket of Object.values(byMarker) as MarkerBucket[]) {
+  for (const bucket of Object.values(byMarker)) {
     totals.ok += bucket.ok;
     totals.error += bucket.error;
     totals.skipped += bucket.skipped;
@@ -415,7 +324,7 @@ export function aggregateEdenMemoryStatus(
       : statuses.some((s) => s.healthy === true)
         ? true
         : undefined,
-    lastError: statuses.map((s) => s.lastError).filter((e): e is string => Boolean(e))[0],
+    lastError: statuses.map((s) => s.lastError).filter((e) => Boolean(e))[0],
     byMarker,
     totals,
   };

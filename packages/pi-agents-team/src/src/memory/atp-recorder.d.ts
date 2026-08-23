@@ -1,3 +1,8 @@
+/**
+ * Type declarations for atp-recorder.ts. The runtime is plain JavaScript;
+ * this file carries the type annotations for consumers.
+ */
+
 import type { EdenMemoryOptions, EdenRememberRecord } from "./eden-memory.js";
 import type { EdenMemoryStatus } from "./memory-status.js";
 import type { AtpStage, AtpMarkerName } from "./atp-markers.js";
@@ -64,20 +69,73 @@ export interface EscalationFields {
   defaultIfSilent?: string;
 }
 
-export function recordGoalReceipt(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordRouting(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordContextGathering(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordSkipContextGathering(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordAction(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordVerification(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordRecordingAndArchival(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordHandOffOrClosure(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
+export function recordGoalReceipt(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordRouting(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordContextGathering(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordSkipContextGathering(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordAction(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordVerification(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordRecordingAndArchival(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordHandOffOrClosure(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
 
-export function recordApiReady(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordHandOff(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordClosure(content: string, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordAndon(reason: string, error: string | undefined, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
-export function recordEscalation(fields: EscalationFields, options?: AtpRecorderOptions, ctx?: AtpRecordContext): Promise<AtpRecordResult>;
+export function recordApiReady(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordHandOff(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordClosure(
+  content: string,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordAndon(
+  reason: string,
+  error: string | undefined,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
+export function recordEscalation(
+  fields: EscalationFields,
+  options?: AtpRecorderOptions,
+  ctx?: AtpRecordContext,
+): Promise<AtpRecordResult>;
 
 export function recordTerminalStageForProfile(
   profileName: string,
