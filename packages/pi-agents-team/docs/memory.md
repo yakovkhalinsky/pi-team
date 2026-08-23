@@ -1,6 +1,6 @@
 # Durable ATP record keeping with eden-memory
 
-Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. This document covers how to enable the integration, the required `.env` fields, the marker contract, startup blocked-task detection, and how to recover when the configured database is locked by another process.
+Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local [eden-memory](https://github.com/KristjanPikhof/eden-memory) SQLite store. This document covers how to enable the integration, the required `.env` fields, the marker contract, startup blocked-task detection, and how memory writes tolerate transient contention.
 
 ## Enabling the integration
 
@@ -71,7 +71,7 @@ The `--metadata` object includes:
 - `goalId`, `taskId`, `workerId`, `profileName`, `packageName` when known
 - `round` and `supersedes` when provided by the caller
 
-Memory writes are best-effort. A missing `.env`, a locked database, or an `eden-memory` CLI failure is returned as `{ ok: false, error, skipped }` and never thrown into the user-facing tool path.
+Memory writes are best-effort. A missing `.env` or an `eden-memory` CLI failure is returned as `{ ok: false, error, skipped }` and never thrown into the user-facing tool path.
 
 ## Startup blocked/unfinished task detection
 
@@ -86,35 +86,11 @@ The detection is heuristic: it relies on the marker text and the presence/absenc
 
 Warnings are emitted during the startup sequence only. There is no per-session notification deduplication; the one-warning-per-session effect is a consequence of the startup-only logging, not an explicit deduplication mechanism.
 
-## Stopping a conflicting eden-memory process
+## Concurrency and retries
 
-eden-memory uses SQLite with an exclusive lock. If another process already holds the lock, writes fail with a message such as:
+Short-lived `eden-memory` CLI invocations used by pi-agents-team share the SQLite database via WAL mode and rely on SQLite's built-in busy handling. Transient contention from multiple agents writing at the same time is resolved automatically with retries; failures only surface after the retry budget is exhausted.
 
-```text
-database /home/yakov/.eden-memory/default.db is locked by another eden-memory process
-```
-
-To release the lock, find and stop the other process:
-
-```bash
-# Find the locking process
-lsof /home/yakov/.eden-memory/default.db
-# or
-fuser /home/yakov/.eden-memory/default.db
-
-# Stop it gracefully
-kill <PID>
-```
-
-If the process is a long-running sync loop or relay server, it may need `SIGTERM` and a short wait, or `kill -9` if it does not respond. Once the lock is released, memory writes will succeed.
-
-To avoid conflicts, use a project-local DB path instead of the global default:
-
-```bash
-export EDEN_MEMORY_DB=./.eden-memory/project.db
-```
-
-The directory will be created by `eden-memory` on first write.
+Long-running processes (e.g., the MCP server, a sync loop, or a relay server) may still use an exclusive advisory lock for their own maintenance operations. If you run one of those alongside pi-agents-team and see a "database is locked by another eden-memory process" error, stop that long-running process and retry. Normal concurrent agent writes no longer require stopping sibling CLI processes.
 
 ## Document / report summaries
 
