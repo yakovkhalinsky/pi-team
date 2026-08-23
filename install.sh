@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="$(pwd)"
 FORCE=false
 SKIP_EXTENSION=false
+EXTENSION_PATH=""   # resolved after SOURCE_DIR is known (see Step 3)
 PI_CMD="pi"
 NODE_CMD="node"
 GIT_CMD="git"
@@ -43,6 +44,10 @@ Usage: install.sh [OPTIONS]
 
 Options:
   -t, --target DIR       Target project directory (default: current directory)
+  -e, --extension-path DIR
+                        Path to the pi-agents-team extension source (default:
+                        <source>/packages/pi-agents-team). Override to pin a
+                        specific source location for forks or CI.
   -f, --force            Overwrite existing .pi-team/ and .pi/agent/ configs
   --skip-extension       Skip installing the pi-agents-team extension
   --pi CMD               Pi command path (default: pi)
@@ -60,6 +65,9 @@ Examples:
 
   # Skip extension install (already installed)
   ./install.sh --skip-extension
+
+  # Pin the extension source to a custom clone
+  ./install.sh --extension-path /opt/my-fork/packages/pi-agents-team
 EOF
   exit 0
 }
@@ -68,6 +76,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target)    TARGET_DIR="$2"; shift 2 ;;
+    -e|--extension-path) EXTENSION_PATH="$2"; shift 2 ;;
     -f|--force)     FORCE=true; shift ;;
     --skip-extension) SKIP_EXTENSION=true; shift ;;
     --pi)           PI_CMD="$2"; shift 2 ;;
@@ -170,20 +179,44 @@ printf "\n${BOLD}Step 3: Installing pi-agents-team extension${NC}\n\n"
 if [[ "${SKIP_EXTENSION}" == "true" ]]; then
   info "Skipping extension install (--skip-extension)"
 else
+  # Resolve EXTENSION_PATH: explicit --extension-path wins, else default
+  # to <source>/packages/pi-agents-team. Works for both a local clone
+  # (SCRIPT_DIR == SOURCE_DIR) and curl|bash (SCRIPT_DIR is somewhere else,
+  # SOURCE_DIR is the temp clone).
+  if [[ -z "${EXTENSION_PATH}" ]]; then
+    EXTENSION_PATH="${SOURCE_DIR}/packages/pi-agents-team"
+  fi
+  # Always normalise to an absolute path so the audit line is unambiguous
+  # and so pi's path resolver sees a stable location.
+  EXTENSION_PATH="$(cd "${EXTENSION_PATH}" 2>/dev/null && pwd || echo "${EXTENSION_PATH}")"
+
+  # Validate the source. Refuse to silently fall back to a registry install
+  # — a missing local copy means the user pointed at the wrong tree.
+  if [[ ! -d "${EXTENSION_PATH}" ]]; then
+    die "Extension source directory not found: ${EXTENSION_PATH}
+  Hint: pass --extension-path DIR to pin the source, or --skip-extension to skip."
+  fi
+  if [[ ! -f "${EXTENSION_PATH}/package.json" ]]; then
+    die "Extension source has no package.json: ${EXTENSION_PATH}
+  Hint: pass --extension-path DIR to pin the source, or --skip-extension to skip."
+  fi
+
+  info "Extension source: ${EXTENSION_PATH}"
+
   if command -v pi &>/dev/null; then
-    info "Installing pi-agents-team extension..."
-    if pi install -l npm:pi-agents-team 2>/dev/null; then
-      ok "pi-agents-team installed (project-local)"
-    elif pi install npm:pi-agents-team 2>/dev/null; then
-      ok "pi-agents-team installed (global)"
+    info "Installing pi-agents-team extension from local source..."
+    if pi install -l "${EXTENSION_PATH}" 2>/dev/null; then
+      ok "pi-agents-team installed from local source (project-local)"
+    elif pi install "${EXTENSION_PATH}" 2>/dev/null; then
+      ok "pi-agents-team installed from local source (global)"
     else
       warn "Could not install pi-agents-team via pi install."
-      warn "Install manually: pi install npm:pi-agents-team"
-      warn "Or for one-run:  pi -e npm:pi-agents-team"
+      warn "Install manually: pi install ${EXTENSION_PATH}"
+      warn "Or for one-run:  pi -e ${EXTENSION_PATH}"
     fi
   else
     warn "pi not found — install the extension later:"
-    warn "  pi install npm:pi-agents-team"
+    warn "  pi install ${EXTENSION_PATH}"
   fi
 fi
 
