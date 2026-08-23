@@ -2,7 +2,11 @@
  * Path A thin native extension shell for pi-agents-team.
  *
  * Replaces the heavy /team overlay with a minimal extension that:
- * - discovers role profiles from .pi/agents/*.md (and ~/.pi/agent/agents/*.md)
+ * - discovers role profiles from project-scope .pi/agents/*.md (walking up
+ *   from cwd) and the package-scope .pi/agents/*.md shipped with this
+ *   extension. The user-scope directory (~/.pi/agent/agents/*.md) is
+ *   intentionally NOT consulted — the team is exactly the 6 protocol roles
+ *   plus any project-local overrides.
  * - implements real delegate_task / wait_for_agents tools via worker Pi processes
  * - registers a /agents slash command that lists discovered agents
  * - injects a short, deterministic agent list into the orchestrator system prompt
@@ -13,7 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
-import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../../runtime/final-answer.js";
 import { cleanupTempPrompt, spawnWorker, writeTempPrompt } from "../../runtime/worker-spawn.js";
 import {
@@ -130,16 +134,18 @@ function getPackageAgentsDir() {
 }
 
 function discoverAgents(cwd) {
-  const userDir = path.join(getAgentDir(), "agents");
+  // The team is "package + project" only. The user-scope directory
+  // (~/.pi/agent/agents/*.md) is intentionally excluded so the orchestrator
+  // never sees profiles that are not part of the pi-team protocol — in
+  // particular, the stock `main` profile shipped with pi core. See
+  // docs/bugs/BUG-005-discover-agents-includes-user-scope-main.md.
   const projectDir = findProjectAgentsDir(cwd);
   const packageDir = getPackageAgentsDir();
 
-  const userAgents = loadAgentsFromDir(userDir, "user");
   const projectAgents = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
   const packageAgents = loadAgentsFromDir(packageDir, "package");
 
   const map = new Map();
-  for (const agent of userAgents) map.set(agent.name, agent);
   for (const agent of packageAgents) map.set(agent.name, agent);
   for (const agent of projectAgents) map.set(agent.name, agent);
 
@@ -277,7 +283,7 @@ export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoa
       .sort((a, b) => a.marker.localeCompare(b.marker));
     memory = {
       enabled: true,
-      ok: memoryTracker.status.ok === true,
+      ok: memoryTracker.status.healthy === true,
       lastError: memoryTracker.status.lastError ?? null,
       blockedGoalCount: lastBlockedGoals.length,
       byMarker: histogramEntries,

@@ -2,13 +2,13 @@
 
 Path A is a thin, native Pi extension. It exposes a small set of tools and slash commands for delegating work to specialist agents, plus a persistent on-screen **team-status widget** so you can see what your team is doing at a glance.
 
-The orchestrator discovers role profiles from `.pi/agents/*.md` (and optional `~/.pi/agent/agents/*.md`), then uses the built-in `delegate_task` and `wait_for_agents` tools to spawn worker Pi processes and collect their `<final_answer>` blocks.
+The orchestrator discovers role profiles from project-scope `.pi/agents/*.md` (walking up from the working directory) and the package-scope `.pi/agents/*.md` shipped with this extension. The team is **package + project agents only** — the user-scope directory (`~/.pi/agent/agents/*.md`) is intentionally not consulted, so the orchestrator always sees exactly the 6 pi-team protocol roles (plus any project-local overrides), never the stock pi `main` profile or any other user-scope profile. The extension then uses the built-in `delegate_task` and `wait_for_agents` tools to spawn worker Pi processes and collect their `<final_answer>` blocks.
 
 ## Team UI
 
 The extension is always visible:
 
-- **Footer status** — A persistent one-liner in the TUI footer such as `● Team (7 agents)` or `● Team (1 running: builder)`. Renders via `ctx.ui.setStatus` and updates on every state change.
+- **Footer status** — A persistent one-liner in the TUI footer such as `● Team (6 agents)` or `● Team (1 running: builder)`. Renders via `ctx.ui.setStatus` and updates on every state change.
 - **`/team` command** — Toggles a multi-line panel below the editor listing discovered agents, currently running workers, and the eden-memory status / byMarker histogram (when memory is enabled). Renders via `ctx.ui.setWidget` with `placement: "belowEditor"`.
 - **Per-tool feedback** — The footer status and the panel both update live as workers are spawned, complete, error out, or are aborted. No need to type a command to see what's happening.
 
@@ -49,7 +49,7 @@ pi -e ./src/extensions/index.ts
 
 ## Agent profile format
 
-Create one Markdown file per agent under `.pi/agents/` (project-local) or `~/.pi/agent/agents/` (global):
+Create one Markdown file per agent under `.pi/agents/` (project-local). The team is the package-shipped 6 protocol roles plus any project-local overrides in this directory.
 
 ```markdown
 ---

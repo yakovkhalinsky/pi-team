@@ -219,12 +219,27 @@ describe("Path A thin extension shell", () => {
     assert.equal(pi.entries.length, 2);
   });
 
-  it("discovers the six role agents from .pi/agents/*.md", () => {
+  it("discovers exactly six role agents from package .pi/agents/*.md (no user-scope)", () => {
     const agents = _testing.discoverAgents(process.cwd());
     const names = agents.map((a) => a.name);
+    assert.equal(
+      agents.length,
+      6,
+      "discoverAgents should return exactly 6 agents: the package team (no user-scope)",
+    );
     for (const required of ["archivist", "builder", "dispatcher", "researcher", "runtime", "verifier"]) {
       assert.ok(names.includes(required), `should discover ${required}`);
     }
+    // The user-scope `main` profile must not leak in.
+    assert.ok(
+      !names.includes("main"),
+      "user-scope `main` profile must not appear in discoverAgents output",
+    );
+    // No agent should report its source as "user".
+    assert.ok(
+      agents.every((a) => a.source !== "user"),
+      "no user-scope agent should appear in discoverAgents output",
+    );
     assert.ok(agents.every((a) => typeof a.description === "string" && a.description.length > 0));
   });
 
@@ -890,7 +905,7 @@ describe("Path A thin extension shell", () => {
     const last = statusCalls[statusCalls.length - 1];
     assert.equal(last.key, _testing.TEAM_STATUS_KEY);
     assert.match(last.value, /Team \(\d+ agents?\)/);
-    assert.match(last.value, /7 agents?/, "should reflect the seven discovered agents");
+    assert.match(last.value, /6 agents?/, "should reflect the six discovered agents");
 
     // Widget is not shown by default; the most recent setWidget call should
     // be a clear (undefined).
