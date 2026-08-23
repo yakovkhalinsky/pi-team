@@ -2,7 +2,7 @@
 
 **Severity:** Medium — the orchestrator's `## Available team agents` block, the `/team` widget, the `/agents` slash command, and the `delegate_task` profile validation all include a 7th agent (`main`, the default pi profile from `~/.pi/agent/agents/main.md`) that is not part of the pi-team protocol. The user wants the team to be exactly the 6 protocol roles.
 
-**Status:** Open — fix designed but not implemented (deferred per user request).
+**Status:** Fixed (`afc8fe7`). Option A applied — user-scope branch dropped from `discoverAgents`; the team is now `package + project` only. Verified end-to-end: `pi -p "list the agents from your system prompt block"` in `~/git/eden-memory`, `~/git/pi-team`, and `~` all return exactly 6 names with no `main`; the widget footer reads `Team (6 agents)`; `delegate_task` with `profileName: "main"` returns the "Unknown agent profile" error.
 
 **Component:** `packages/pi-agents-team/src/extensions/pi-agent-team/index.ts` (`discoverAgents`)
 
@@ -171,3 +171,8 @@ The right fix is the code change in `discoverAgents`, not the workaround.
 - `reference/protocol.md` — the 6 protocol roles the team is supposed to be.
 - `ac33610` — added the team-status widget, which surfaces the 7-agent count visibly.
 - `BUG-004` — the team widget's visual is also unverified, but the data is the issue here.
+
+## Closing commit
+
+[`afc8fe7`](https://github.com/yakovkhalinsky/pi-team/commit/afc8fe7) —
+`fix(discovery): BUG-005 — drop user-scope agents from team`.

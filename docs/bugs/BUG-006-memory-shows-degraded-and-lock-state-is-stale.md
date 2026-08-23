@@ -2,7 +2,7 @@
 
 **Severity:** Medium — cosmetic-but-persistent UI lie; a runtime concept (`locked`) that
 no longer reflects how eden-memory actually behaves.
-**Status:** Open — fix designed below; ready to land.
+**Status:** Fixed (`d81e67d`). `locked` concept removed; `buildTeamSnapshot` now reads `memoryTracker.status.healthy === true`. Same commit ships the BUG-003 partial fix (AbortController in tracker; spawnEden child/stream unref); the two remaining `node:test` PipeWrap leaks are still pending and `BUG-003` remains Open.
 **Discovered:** 2026-08-23, while reviewing the team-status widget's `memory:` line.
 
 ## Summary
@@ -230,3 +230,10 @@ The shape of the tests changes (more "behaviour-driven", fewer
   `memory: ok`; with eden-memory down, footer shows `memory: degraded` (and the
   graceful-fallback path from the no-opt-out refactor fires if/when that's
   landed).
+
+## Closing commit
+
+[`d81e67d`](https://github.com/yakovkhalinsky/pi-team/commit/d81e67d) —
+`fix(memory): BUG-003 partial + BUG-006`. Note: this commit also ships the
+BUG-003 partial fix; BUG-003 is **not** closed by this commit (two `node:test`
+PipeWraps still leak intermittently without `--test-force-exit`).
