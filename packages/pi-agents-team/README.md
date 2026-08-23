@@ -10,7 +10,7 @@ The orchestrator discovers role profiles from `.pi/agents/*.md` (and optional `~
 - `delegate_task` tool — spawn a worker Pi process for a profile and return its final answer.
 - `wait_for_agents` tool — poll tracked workers until they are terminal, time out, or raise a relay question.
 - In-memory worker state with best-effort `pi.appendEntry` persistence.
-- Eden-memory ATP integration (optional) — when `EDEN_MEMORY_ENABLED=true` and the required env fields are configured, the extension records lifecycle markers on `session_start`, `delegate_task`, and worker completion, and runs a startup check for blocked/unfinished goals.
+- Eden-memory ATP integration (optional) — when `EDEN_MEMORY_ENABLED=true` and the required env fields are configured, the extension records lifecycle markers on `session_start`, `delegate_task`, and worker completion, runs a startup check for blocked/unfinished goals, and surfaces a per-marker histogram on every `delegate_task` / `wait_for_agents` tool result. See [docs/memory.md](./docs/memory.md).
 - Plain-JS source that ships as native ESM.
 
 ## What was removed

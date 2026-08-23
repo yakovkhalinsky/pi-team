@@ -164,9 +164,22 @@ It returns a compact JSON payload:
   "result": {
     "headline": "wrote migration guide",
     "finalAnswer": "..."
+  },
+  "memory": {
+    "enabled": true,
+    "healthy": true,
+    "recordsWritten": 4,
+    "byMarker": {
+      "[routing]":   { "ok": 1, "error": 0, "skipped": 0 },
+      "[action]":    { "ok": 1, "error": 0, "skipped": 0 },
+      "[verdict]":   { "ok": 1, "error": 0, "skipped": 0 },
+      "[recorded]":  { "ok": 1, "error": 0, "skipped": 0 }
+    }
   }
 }
 ```
+
+The optional `memory` block is present whenever eden-memory is enabled and configured. It carries a per-marker histogram so the orchestrator can verify the lifecycle completed without parsing the durable store. See [docs/memory.md](./docs/memory.md) for the full schema.
 
 ### Wait for agents
 
@@ -199,7 +212,7 @@ It returns a compact JSON payload:
 - **Best-effort persistence.** The extension writes a single `pi-agents-team/state` entry via `pi.appendEntry` on load and session start, but worker transcripts, activity streams, and usage details are not persisted.
 - **No automatic recovery.** If the main Pi session exits, in-memory worker state is lost. Re-run `delegate_task` for any unfinished work.
 - **No parallel git worktrees.** Workers run in the directory supplied by `cwd` (defaulting to the orchestrator cwd). Manage worktrees externally if you need them.
-- **No eden-memory dashboard.** ATP markers are still written to the configured SQLite store when enabled, but there is no TUI status widget or cost tab. Use the durable store directly if you need to inspect history.
+- **No eden-memory dashboard.** ATP markers are still written to the configured SQLite store when enabled, but there is no TUI status widget or cost tab. The orchestrator's view of memory state is the `memory` block on `delegate_task` / `wait_for_agents` payloads (see above). Use the durable store directly if you need to inspect history.
 - **Eden-memory startup blocked-task check.** On `session_start`, the extension queries eden-memory for goals that look blocked or unfinished and appends a short summary to the orchestrator prompt. Failures are logged via `pi.appendEntry` and do not block startup.
 - **`agent_message` is gone.** Relay questions are surfaced by `wait_for_agents`; respond to them in the main session by calling `delegate_task` again or by updating the worker context directly.
 
