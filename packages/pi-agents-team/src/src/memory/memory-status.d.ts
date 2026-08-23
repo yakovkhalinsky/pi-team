@@ -39,14 +39,12 @@ export interface EdenMemoryWriteResult {
 
 export interface EdenMemoryHealthResult {
   ok: boolean;
-  locked?: boolean;
   error?: string;
 }
 
 export interface EdenMemoryStatus {
   enabled: boolean;
   healthy: boolean | undefined;
-  locked: boolean;
   recordsWritten: number;
   recordsFailed: number;
   recordsSkipped: number;
@@ -66,7 +64,6 @@ export interface EdenMemoryAggregateStatus {
   recordsWritten: number;
   recordsFailed: number;
   recordsSkipped: number;
-  locked: boolean;
   healthy: boolean | undefined;
   lastError: string | undefined;
   byMarker: Partial<Record<AtpMarkerName, MarkerBucket>>;

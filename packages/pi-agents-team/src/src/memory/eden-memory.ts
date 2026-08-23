@@ -76,10 +76,13 @@ function spawnEden(bin, subcommand, args, options = {}) {
     let timedOut = false;
     let aborted = false;
     const child = spawn(bin, [subcommand, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    if (typeof child.unref === "function") child.unref();
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
+    if (typeof child.stdout.unref === "function") child.stdout.unref();
+    if (typeof child.stderr.unref === "function") child.stderr.unref();
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
     });
@@ -124,6 +127,17 @@ function spawnEden(bin, subcommand, args, options = {}) {
         reject(error);
       } else {
         resolve({ code, stdout, stderr });
+      }
+      // Release stdio handles so the parent's PipeWraps can be reclaimed.
+      // Otherwise the parent's event loop stays alive even after the child
+      // has exited (the test runner reports this as a hang).
+      if (child.stdout) {
+        child.stdout.removeAllListeners();
+        child.stdout.destroy();
+      }
+      if (child.stderr) {
+        child.stderr.removeAllListeners();
+        child.stderr.destroy();
       }
     });
     function onAbort() {
@@ -305,19 +319,22 @@ export async function search(options, signal, timeoutMs) {
 }
 
 /**
- * Check whether the configured eden-memory database is reachable. Returns
- * `locked: true` when another process holds the SQLite lock.
+ * Check whether the configured eden-memory database is reachable.
+ *
+ * The team code does not track database locking as a separate UI state.
+ * Eden-memory is lockless at the CLI level: SQLite handles concurrency
+ * internally, and any failed write — including connection-pool exhaustion —
+ * surfaces as `{ ok: false, error, stderr? }` and is treated the same as
+ * any other write failure by the rest of the team code.
  */
 export async function health(options = {}, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [...buildGlobalArgs(options)];
   try {
     const { code, stdout, stderr } = await spawnEden(bin, "health", args, { signal, timeoutMs });
-    const output = (stderr || stdout).toLowerCase();
-    const locked = output.includes("locked by another eden-memory process") || output.includes("already locked");
-    if (code !== 0 || locked) {
+    if (code !== 0) {
       const error = cleanErrorMessage(stderr || stdout);
-      return { ok: false, locked, error, stderr: stderr || stdout };
+      return { ok: false, error, stderr: stderr || stdout };
     }
     return { ok: true };
   } catch (error) {

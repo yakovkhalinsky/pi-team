@@ -151,16 +151,6 @@ console.log("ok");
     assert.equal(result.ok, true);
   });
 
-  it("detects a locked database in health", async () => {
-    const bin = makeFakeBin(`
-console.error('time=... level=ERROR msg="health failed" err="database /x.db is locked by another eden-memory process"');
-process.exit(1);
-`);
-    const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" });
-    assert.equal(result.ok, false);
-    assert.equal(result.locked, true);
-  });
-
   it("reports missing required fields from merged eden options", () => {
     const base = {
       bin: "/bin",

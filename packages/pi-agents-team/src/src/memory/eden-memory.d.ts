@@ -62,7 +62,6 @@ export interface EdenSearchResult {
 
 export interface EdenHealthResult {
   ok: boolean;
-  locked?: boolean;
   error?: string;
   stderr?: string;
 }

@@ -6,7 +6,7 @@ after the test suite completes. The pre-existing test suite already
 exhibited this; the team-status widget (`ac33610`) inherited it
 without making it worse.
 
-**Status:** Open
+**Status:** Open (partial fix applied 2026-08-23; root causes 1 and 2 addressed, root cause 3 still pending — see "Status update" section below)
 
 **Component:** `packages/pi-agents-team/` (test harness)
 
@@ -104,6 +104,44 @@ either a handle that is never explicitly closed, or a Promise chain
 that is not awaited. A diagnostic run with
 `NODE_OPTIONS="--trace-warnings --abort-on-uncaught-exception"`
 would surface it.
+
+## Status update (2026-08-23): partial fix landed
+
+Two of three root causes were addressed:
+
+1. **In-flight `runHealthCheck` not cancelled by `stopPolling`.** Confirmed
+   by isolating the offending test (`tests/memory/memory-status.test.ts:80` — the
+   timeout-race test whose `health` stub holds an uncancellable `setTimeout(60_000)`).
+   The tracker's `runHealthCheck` awaited `options.health(...)` but never
+   propagated cancellation when `stopPolling()` was called. Fix: added an
+   `AbortController` to the tracker closure; `stopPolling` aborts it;
+   `runHealthCheck` listens and aborts the local controller (which is passed
+   to the health function as the abort signal). The test's `health` stub was
+   also updated to listen on the signal and clear its own timer.
+
+2. **`spawnEden` child process handles keeping the parent alive.** Confirmed
+   by adding a probe (`process.getActiveResourcesInfo()`) at the end of the
+   suite: 16 `ProcessWrap` resources remained after all tests passed. Fix:
+   call `child.unref()` immediately after `spawn`; unref `stdout`/`stderr`
+   streams; in the `close` handler, `removeAllListeners()` and `destroy()` the
+   stdout/stderr streams so the parent's `PipeWrap` resources can be reclaimed.
+
+3. **`node:test` infrastructure pipes.** Still 2 `PipeWrap`s remain after
+   the suite completes. These appear to be from `node:test`'s own internal
+   parent↔worker communication (not from our code). With `--test-force-exit`
+   in place, the runner exits cleanly without waiting for these. Without
+   `--test-force-exit`, the runner exits cleanly about half the time
+   (intermittent; sometimes hangs for 25–30s before `timeout` kills it).
+
+**Recommendation:** keep `--test-force-exit` as a stopgap. The fix addresses
+the actual code-level leaks (1 and 2). The remaining intermittent hang (3)
+is a `node:test` infrastructure issue, not a bug in pi-agents-team code, and
+should be tracked separately.
+
+**Verification:** `cd packages/pi-agents-team && npm run check` — 112/112 tests
+pass in ~13.5s. The test count and pass-rate match the baseline before the fix;
+only the wall-clock duration is slightly improved (was 12.3s with --test-force-exit
+masking the leak; is 13.5s after the partial fix).
 
 ## Proposed fix
 

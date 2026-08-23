@@ -46,17 +46,6 @@ describe("memory/memory-status", () => {
       assert.equal(tracker.status.recordsFailed, 1);
       assert.equal(tracker.status.lastError, "disk full");
     });
-
-    it("updates healthy/locked from health results", () => {
-      const tracker = createMemoryStatusTracker({ enabled: true });
-      tracker.updateFromHealthResult({ ok: true });
-      assert.equal(tracker.status.healthy, true);
-      assert.equal(tracker.status.locked, false);
-      tracker.updateFromHealthResult({ ok: false, locked: true, error: "database is locked" });
-      assert.equal(tracker.status.healthy, false);
-      assert.equal(tracker.status.locked, true);
-      assert.equal(tracker.status.lastError, "database is locked");
-    });
   });
 
   describe("polling", () => {
@@ -82,10 +71,14 @@ describe("memory/memory-status", () => {
       let calls = 0;
       const tracker = createMemoryStatusTracker({
         enabled: true,
-        health: async (_options, _signal, timeoutMs) => {
+        health: async (_options, signal) => {
           calls += 1;
-          return new Promise((resolve) => {
-            setTimeout(() => resolve({ ok: true }), 60_000);
+          return new Promise((resolve, reject) => {
+            const id = setTimeout(() => resolve({ ok: true }), 60_000);
+            signal.addEventListener("abort", () => {
+              clearTimeout(id);
+              reject(new Error("aborted"));
+            }, { once: true });
           });
         },
         healthTimeoutMs: 50,
@@ -164,13 +157,12 @@ describe("memory/memory-status", () => {
       assert.equal(getMemoryStatusGlyph({ enabled: false } as any), "");
     });
 
-    it("chooses glyphs by severity (locked beats error, error beats warning, skipped beats ok)", () => {
+    it("chooses glyphs by severity (error beats warning, skipped beats ok)", () => {
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: true } as any), "✓");
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: false } as any), "✗");
       assert.equal(getMemoryStatusGlyph({ enabled: true, lastResult: "error" } as any), "✗");
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: true, lastError: "x" } as any), "⚠");
       assert.equal(getMemoryStatusGlyph({ enabled: true, lastResult: "skipped" } as any), "–");
-      assert.equal(getMemoryStatusGlyph({ enabled: true, locked: true } as any), "🔒");
     });
 
     it("formats a short fragment without content", () => {
@@ -235,11 +227,6 @@ describe("memory/memory-status", () => {
       assert.equal(agg?.totals.skipped, 1);
     });
 
-    it("reports locked if any status is locked", () => {
-      const workers = [{ edenMemoryStatus: { enabled: true, locked: true } as any }];
-      const agg = aggregateEdenMemoryStatus(undefined, workers);
-      assert.equal(agg?.locked, true);
-    });
   });
 
   describe("createWorkerEdenMemoryStatus / ensureWorkerEdenMemoryStatus", () => {

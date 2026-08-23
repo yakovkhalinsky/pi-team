@@ -59,7 +59,6 @@ export function createWorkerEdenMemoryStatus(enabled) {
   return {
     enabled,
     healthy: undefined,
-    locked: false,
     recordsWritten: 0,
     recordsFailed: 0,
     recordsSkipped: 0,
@@ -86,14 +85,13 @@ export function ensureWorkerEdenMemoryStatus(worker, config) {
  * Create a live memory status tracker.
  *
  * When `health` is provided, startPolling() begins a bounded interval that
- * calls it and updates status.healthy / status.locked. Call stopPolling()
- * before teardown to release the timer.
+ * calls it and updates status.healthy. Call stopPolling() before teardown
+ * to release the timer.
  */
 export function createMemoryStatusTracker(options) {
   const status = {
     enabled: options.enabled,
     healthy: undefined,
-    locked: false,
     recordsWritten: 0,
     recordsFailed: 0,
     recordsSkipped: 0,
@@ -105,6 +103,7 @@ export function createMemoryStatusTracker(options) {
 
   let timer;
   let runningHealthCheck = false;
+  let healthController = new AbortController();
 
   function updateFromWriteResult(result) {
     status.lastWriteAt = nowMs();
@@ -118,8 +117,7 @@ export function createMemoryStatusTracker(options) {
 
   function updateFromHealthResult(result) {
     status.lastHealthCheckAt = nowMs();
-    status.healthy = result.ok && !result.locked;
-    status.locked = result.locked === true;
+    status.healthy = result.ok;
     if (!status.healthy) {
       status.lastError = normalizeError(result);
     } else {
@@ -129,33 +127,51 @@ export function createMemoryStatusTracker(options) {
 
   async function runHealthCheck() {
     if (!options.enabled || !options.health || runningHealthCheck) return;
+    if (healthController.signal.aborted) return;
     runningHealthCheck = true;
-    try {
-      const timeoutMs = options.healthTimeoutMs ?? 10_000;
-      const timeout = new Promise((_, reject) => {
-        const id = setTimeout(
-          () => reject(new Error(`Eden-memory health check timed out after ${timeoutMs}ms`)),
-          timeoutMs,
+    const localController = new AbortController();
+    const onAbort = () => localController.abort();
+    healthController.signal.addEventListener("abort", onAbort, { once: true });
+    let timeoutId;
+    const healthPromise = Promise.race([
+      options.health(options.edenOptions, localController.signal).catch((error) => ({ __error: error })),
+      new Promise((resolve) => {
+        timeoutId = setTimeout(
+          () => resolve({ __timeout: true, timeoutMs: options.healthTimeoutMs ?? 10_000 }),
+          options.healthTimeoutMs ?? 10_000,
         );
-        if (typeof id.unref === "function") id.unref();
-      });
-      const result = await Promise.race([
-        options.health(options.edenOptions, AbortSignal.timeout(timeoutMs), timeoutMs),
-        timeout,
-      ]);
-      updateFromHealthResult(result);
-    } catch (error) {
-      updateFromHealthResult({
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+        if (typeof timeoutId.unref === "function") timeoutId.unref();
+      }),
+    ]);
+    try {
+      const result = await healthPromise;
+      if (healthController.signal.aborted) return;
+      if ("__timeout" in result) {
+        updateFromHealthResult({
+          ok: false,
+          error: `Eden-memory health check timed out after ${result.timeoutMs}ms`,
+        });
+      } else if ("__error" in result) {
+        updateFromHealthResult({
+          ok: false,
+          error: result.__error instanceof Error ? result.__error.message : String(result.__error),
+        });
+      } else {
+        updateFromHealthResult(result);
+      }
     } finally {
+      localController.abort();
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      healthController.signal.removeEventListener("abort", onAbort);
       runningHealthCheck = false;
     }
   }
 
   function startPolling() {
     if (timer || !options.enabled || !options.health) return;
+    if (healthController.signal.aborted) {
+      healthController = new AbortController();
+    }
     void runHealthCheck();
     timer = setInterval(() => {
       void runHealthCheck();
@@ -164,9 +180,11 @@ export function createMemoryStatusTracker(options) {
   }
 
   function stopPolling() {
-    if (!timer) return;
-    clearInterval(timer);
-    timer = undefined;
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+    healthController.abort();
   }
 
   return { status, updateFromWriteResult, updateFromHealthResult, startPolling, stopPolling };
@@ -176,11 +194,10 @@ export function createMemoryStatusTracker(options) {
  * Compact memory glyph for narrow UI surfaces.
  *
  * Severity order (highest priority first):
- *   locked → error → warning (last error) → skipped (last write) → ok → unknown
+ *   error → warning (last error) → skipped (last write) → ok → unknown
  */
 export function getMemoryStatusGlyph(status) {
   if (!status || !status.enabled) return "";
-  if (status.locked) return "🔒";
   if (status.healthy === false) return "✗";
   if (status.lastResult === "error") return "✗";
   if (status.lastError) return "⚠";
@@ -197,8 +214,7 @@ export function formatMemoryStatusFragment(status) {
   if (!status || !status.enabled) return "";
   const glyph = getMemoryStatusGlyph(status);
   const parts = [];
-  if (status.locked) parts.push("locked");
-  else if (status.healthy === false) parts.push("unhealthy");
+  if (status.healthy === false) parts.push("unhealthy");
   else if (status.lastResult === "skipped") parts.push(`${status.recordsSkipped} skipped`);
   else if (status.recordsFailed > 0) parts.push(`${status.recordsFailed} failed`);
   else if (status.healthy === true) parts.push("ok");
@@ -318,7 +334,6 @@ export function aggregateEdenMemoryStatus(teamStatus, workers) {
     recordsWritten: totals.ok,
     recordsFailed: totals.error,
     recordsSkipped: totals.skipped,
-    locked: statuses.some((s) => s.locked),
     healthy: statuses.some((s) => s.healthy === false)
       ? false
       : statuses.some((s) => s.healthy === true)

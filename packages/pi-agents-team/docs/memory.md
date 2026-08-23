@@ -111,7 +111,6 @@ Shape:
   "memory": {
     "enabled": true,
     "healthy": true,
-    "locked": false,
     "recordsWritten": 6,
     "recordsFailed": 0,
     "recordsSkipped": 0,
@@ -167,7 +166,7 @@ Warnings are emitted during the startup sequence only. There is no per-session n
 
 Short-lived `eden-memory` CLI invocations used by pi-agents-team share the SQLite database via WAL mode and rely on SQLite's built-in busy handling. Transient contention from multiple agents writing at the same time is resolved automatically with retries; failures only surface after the retry budget is exhausted.
 
-Long-running processes (e.g., the MCP server, a sync loop, or a relay server) may still use an exclusive advisory lock for their own maintenance operations. If you run one of those alongside pi-agents-team and see a "database is locked by another eden-memory process" error, stop that long-running process and retry. Normal concurrent agent writes no longer require stopping sibling CLI processes.
+Long-running processes (e.g., the MCP server, a sync loop, or a relay server) run alongside pi-agents-team. SQLite handles concurrency internally; any failed write from the team code — including connection-pool exhaustion — is treated as a normal error (`{ ok: false, error, stderr? }`) and surfaces through the same path as any other write failure (counted in `recordsFailed`, surfaced via `lastError`).
 
 ## Document / report summaries
 

@@ -14,7 +14,7 @@ import {
  * instead pin down the contract consumers depend on:
  *
  *   { enabled, byMarker, totals, recordsWritten/Failed/Skipped,
- *     locked, healthy, lastError }
+ *     healthy, lastError }
  *
  * `byMarker` is keyed by every marker in the canonical table, with
  * { ok, error, skipped, lastTs? } buckets.

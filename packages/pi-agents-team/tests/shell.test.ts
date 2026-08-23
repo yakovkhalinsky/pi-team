@@ -1126,7 +1126,7 @@ describe("Path A thin extension shell", () => {
     const fakeTracker = {
       status: {
         enabled: true,
-        ok: true,
+        healthy: true,
         byMarker: { "[routing]": 3, "[recorded]": 1 },
       },
     };
@@ -1152,6 +1152,55 @@ describe("Path A thin extension shell", () => {
     assert.ok(lines[0].includes("Pi Agents Team"));
     assert.ok(lines.some((l) => /Memory: ok/.test(l)));
     assert.ok(lines.some((l) => /byMarker:/.test(l)));
+  });
+
+  it("memory snapshot reports ok when tracker is healthy", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>();
+    const fakeTracker = {
+      status: {
+        enabled: true,
+        healthy: true,
+        byMarker: {},
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, []);
+    assert.ok(snap.memory);
+    assert.equal(snap.memory!.ok, true);
+    assert.equal(snap.memory!.lastError, null);
+  });
+
+  it("memory snapshot reports degraded when tracker is unhealthy", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>();
+    const fakeTracker = {
+      status: {
+        enabled: true,
+        healthy: false,
+        lastError: "eden-memory unreachable",
+        byMarker: {},
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, []);
+    assert.ok(snap.memory);
+    assert.equal(snap.memory!.ok, false);
+    assert.equal(snap.memory!.lastError, "eden-memory unreachable");
+  });
+
+  it("memory snapshot reports degraded when tracker has no health yet", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>();
+    const fakeTracker = {
+      status: {
+        enabled: true,
+        // healthy is intentionally undefined: the tracker exists but the
+        // first health check has not yet landed.
+        byMarker: {},
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, []);
+    assert.ok(snap.memory);
+    assert.equal(snap.memory!.ok, false);
   });
 
   it("workers map is cleared at session_start so cross-session leakage is prevented", async () => {
