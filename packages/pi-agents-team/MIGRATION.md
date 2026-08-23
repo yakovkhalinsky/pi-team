@@ -6,7 +6,7 @@ Path A is a major simplification of `pi-agents-team`. It removes the heavy orche
 
 - **No more `/team` overlay.** The interactive dashboard, worker inspection, copy/result/steer/stop controls, and role-scoped routing UI are gone.
 - **Configuration moves from `agents-team.json` to `.pi/agents/*.md`.** Each role becomes a single Markdown file with YAML frontmatter plus a prompt body.
-- **Slash commands are reduced to `/agents`.** Use `/agents` to list discovered profiles.
+- **No manual discovery command.** The agent list is injected into the orchestrator's system prompt on every `before_agent_start` (the `## Available team agents` block), so the orchestrator always sees the live team. There is no `/agents` command — discovery is the prompt, not a manual step.
 - **Delegation is handled by built-in tools.** The extension registers `delegate_task` and `wait_for_agents`; the old `agent_status`, `agent_result`, `agent_message`, `ping_agents`, and `agent_cancel` tools are removed.
 - **Eden-memory is a required primitive.** The team either loads fully (when `eden-memory` is healthy) or doesn't load (when the binary is unreachable). When it doesn't load, the orchestrator sees a normal pi session with no team tools, no team widget, no system-prompt block, a footer status reading `Team unavailable — eden-memory unreachable`, and a `ctx.ui.notify` fired with the same message. There is no `EDEN_MEMORY_ENABLED` env var; the var is silently ignored if set. To remove the team entirely, uninstall the extension.
 - **Plain-JS compatibility is preserved.** The source is emitted JavaScript in `.ts` files; the runtime does not depend on TypeScript.
@@ -25,8 +25,9 @@ The following commands no longer exist:
 - `/team-copy`
 - `/team-init`
 - `/team-env`
+- `/agents` (the agent list is now in the system prompt; there is no command to list it)
 
-Use `/agents` to discover profiles, and use the `delegate_task` / `wait_for_agents` tools to run and monitor work.
+Use the `delegate_task` / `wait_for_agents` tools to run and monitor work, and read the `## Available team agents` block in the orchestrator's system prompt to see which profiles are loaded.
 
 ### Tools removed
 

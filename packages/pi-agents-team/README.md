@@ -14,13 +14,8 @@ The extension is always visible when the team is loaded. There is no toggle.
 
 When eden-memory is unreachable, the team falls back gracefully: a one-line footer status reads `Team unavailable — eden-memory unreachable`, a `ctx.ui.notify` is fired, and the orchestrator sees a normal pi session with no team tools. Fix the binary path (or install eden-memory) and restart pi.
 
-```
-/agents    # list discovered agents (or show details: /agents <name>)
-```
-
 ## What remains
 
-- `/agents` slash command — list discovered agent profiles.
 - `delegate_task` tool — spawn a worker Pi process for a profile and return its final answer.
 - `wait_for_agents` tool — poll tracked workers until they are terminal, time out, or raise a relay question.
 - `abort_worker` tool — terminate a running worker.
@@ -28,6 +23,8 @@ When eden-memory is unreachable, the team falls back gracefully: a one-line foot
 - In-memory worker state with best-effort `pi.appendEntry` persistence.
 - Eden-memory ATP integration — required. When the binary is reachable, the extension records lifecycle markers on `session_start`, `delegate_task`, and worker completion, runs a startup check for blocked/unfinished goals, and surfaces a per-marker histogram in both the team panel and every `delegate_task` / `wait_for_agents` tool result. When the binary is unreachable, the team falls back to a normal pi session. See [docs/memory.md](./docs/memory.md).
 - Plain-JS source that ships as native ESM.
+
+The orchestrator's system prompt is the authoritative discovery surface: every `before_agent_start` injects the `## Available team agents` block (with each profile's name and description) into the prompt, so the orchestrator always sees the live team without needing a manual slash command. There is no `/agents` command — discovery happens automatically.
 
 ## What was removed
 
@@ -72,7 +69,7 @@ I am the **builder** worker...
 Supported frontmatter fields:
 
 - `name` (required) — profile identifier used by `delegate_task`.
-- `description` (required) — short summary shown by `/agents` and injected into the orchestrator prompt.
+- `description` (required) — short summary injected into the orchestrator prompt.
 - `tools` (optional) — list of tool names the worker is allowed to use.
 - `model` (optional) — override the worker model.
 - `thinkingLevel` (optional) — `low`, `medium`, `high`, or `max`.
@@ -80,12 +77,6 @@ Supported frontmatter fields:
 Everything after the frontmatter is used as the worker system prompt.
 
 ## Usage examples
-
-List available agents:
-
-```
-/agents
-```
 
 Delegate work to the `builder` agent:
 

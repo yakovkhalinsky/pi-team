@@ -8,8 +8,10 @@
  *   intentionally NOT consulted — the team is exactly the 6 protocol roles
  *   plus any project-local overrides.
  * - implements real delegate_task / wait_for_agents tools via worker Pi processes
- * - registers a /agents slash command that lists discovered agents
  * - injects a short, deterministic agent list into the orchestrator system prompt
+ *   on every before_agent_start, so the orchestrator always sees the live team
+ *   without needing to type a slash command
+ * - registers a /stop-worker slash command for aborting in-flight workers
  * - records a lightweight state entry on session start
  */
 
@@ -36,7 +38,7 @@ import {
 } from "../../src/memory/index.js";
 
 const STATE_CUSTOM_TYPE = "pi-agents-team/state";
-const AGENTS_MESSAGE_TYPE = "pi-agents-team/agents-list";
+const TEAM_OUTPUT_TYPE = "pi-agents-team/team-output";
 const MEMORY_STATUS_TYPE = "pi-agents-team/memory-status";
 const MEMORY_BLOCKED_GOALS_TYPE = "pi-agents-team/memory-blocked-goals";
 
@@ -173,49 +175,11 @@ function buildAgentPromptBlock(agents) {
   ].join("\n");
 }
 
-function formatAgentListDetailed(agents) {
-  if (agents.length === 0) return "No agents discovered.";
-  const lines = ["Available team agents:", ""];
-  for (const agent of agents) {
-    lines.push(`- ${agent.name}: ${agent.description}`);
-    const meta = [];
-    if (agent.tools?.length) meta.push(`tools: ${agent.tools.join(", ")}`);
-    if (agent.model) meta.push(`model: ${agent.model}`);
-    if (agent.thinkingLevel) meta.push(`thinkingLevel: ${agent.thinkingLevel}`);
-    if (meta.length) lines.push(`  ${meta.join(" | ")}`);
-  }
-  lines.push("");
-  lines.push('Delegate with: `delegate_task` using profileName "<agent-name>" etc.');
-  return lines.join("\n");
-}
-
-function formatAgentDetail(agent) {
-  const lines = [
-    `Agent: ${agent.name}`,
-    `Description: ${agent.description}`,
-  ];
-  if (agent.tools?.length) lines.push(`Tools: ${agent.tools.join(", ")}`);
-  if (agent.model) lines.push(`Model: ${agent.model}`);
-  if (agent.thinkingLevel) lines.push(`Thinking level: ${agent.thinkingLevel}`);
-  lines.push("");
-  lines.push(`Delegate with: \`delegate_task\` using profileName "${agent.name}" etc.`);
-  if (agent.systemPrompt?.trim()) {
-    lines.push("");
-    lines.push(agent.systemPrompt.trim());
-  }
-  return lines.join("\n");
-}
-
-function findAgentByQuery(agents, query) {
-  const normalized = query.trim().split(/\s+/)[0].toLowerCase();
-  return agents.find((a) => a.name.toLowerCase() === normalized);
-}
-
 function sendAgentOutput(pi, ctx, text) {
   const send = typeof ctx?.sendMessage === "function" ? ctx.sendMessage.bind(ctx) : pi.sendMessage?.bind(pi);
   if (send) {
     send({
-      customType: AGENTS_MESSAGE_TYPE,
+      customType: TEAM_OUTPUT_TYPE,
       content: [{ type: "text", text }],
       display: true,
     });
@@ -508,7 +472,10 @@ export function buildWidgetLines(snapshot, now = Date.now()) {
     lines.push("");
   }
 
-  lines.push("Use /agents for details.");
+  // No hint line: the agent roster above is the user-visible surface, and
+  // discovery details already flow into the orchestrator's system prompt
+  // via before_agent_start. Adding a `/agents` hint would point the user
+  // at a command that no longer exists.
 
   return lines.slice(0, 40);
 }
@@ -628,10 +595,7 @@ export const _testing = {
   discoverAgents,
   hasProjectAgents,
   formatAgentList,
-  formatAgentListDetailed,
-  formatAgentDetail,
   buildAgentPromptBlock,
-  findAgentByQuery,
   sendAgentOutput,
   getWorkerMap: () => workers,
   clearWorkers: () => workers.clear(),
@@ -1341,32 +1305,15 @@ export default function (pi, options = {}) {
     },
   });
 
-  pi.registerCommand("agents", {
-    description: "List discovered team agents from .pi/agents/*.md, or show details: /agents <name>",
-    handler: async (args, ctx) => {
-      const cwd = ctx.cwd ?? process.cwd();
-      const agents = discoverAgents(cwd);
-      const query = typeof args === "string" ? args.trim() : "";
-
-      if (!query) {
-        sendAgentOutput(pi, ctx, formatAgentListDetailed(agents));
-      } else {
-        const agent = findAgentByQuery(agents, query);
-        if (!agent) {
-          const available = agents.map((a) => a.name).join(", ") || "none";
-          sendAgentOutput(
-            pi,
-            ctx,
-            `Agent "${query}" not found. Available agents: ${available}.`,
-          );
-        } else {
-          sendAgentOutput(pi, ctx, formatAgentDetail(agent));
-        }
-      }
-      // Keep the team panel in sync with whatever /agents just looked at.
-      refreshUi(ctx);
-    },
-  });
+  // The /agents command is intentionally not registered. The orchestrator
+  // already receives the full agent list (with names and descriptions) on
+  // every `before_agent_start` via the `## Available team agents` block
+  // in its system prompt — that is the authoritative discovery surface, and
+  // it stays in sync with the live team. A duplicate listing command
+  // would have to be kept in lockstep with the prompt block, would
+  // re-discover from disk (the same data the orchestrator just saw), and
+  // would be available only when the user remembers the slash command.
+  // Discovery belongs in the prompt, not in a manual command.
 
   recordState();
 }

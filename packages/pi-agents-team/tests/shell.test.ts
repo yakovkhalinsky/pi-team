@@ -200,16 +200,19 @@ describe("Path A thin extension shell", () => {
     }
   });
 
-  it("registers delegate_task, wait_for_agents and abort_worker tools plus /agents and /stop-worker commands", () => {
+  it("registers delegate_task, wait_for_agents and abort_worker tools plus /stop-worker command", () => {
     const pi = createMockPi();
     extensionFactory(pi);
 
     const toolNames = pi.tools.map((t) => t.name).sort();
     assert.deepEqual(toolNames, ["abort_worker", "delegate_task", "wait_for_agents"]);
 
+    // The /agents command is intentionally not registered. The
+    // orchestrator receives the agent list in its system prompt on every
+    // before_agent_start — the discovery surface is the prompt, not a
+    // manual command.
     const agentsCmd = pi.commands.find((c) => c.name === "agents");
-    assert.ok(agentsCmd, "/agents command should be registered");
-    assert.ok(agentsCmd!.def.handler, "/agents command should have a handler");
+    assert.equal(agentsCmd, undefined, "/agents command should NOT be registered");
 
     const stopCmd = pi.commands.find((c) => c.name === "stop-worker");
     assert.ok(stopCmd, "/stop-worker command should be registered");
@@ -299,51 +302,27 @@ describe("Path A thin extension shell", () => {
     assert.equal(result, undefined);
   });
 
-  it("/agents command sends a formatted agent list", async () => {
-    const pi = createMockPi();
-    extensionFactory(pi);
-
-    const cmd = pi.commands.find((c) => c.name === "agents")!;
-    await cmd.def.handler("", createMockContext());
-
-    assert.equal(pi.messages.length, 1);
-    assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
-    const text = pi.messages[0].content[0].text as string;
-    assert.ok(text.includes("Available team agents:"));
-    assert.ok(text.includes("builder:"));
-    assert.ok(text.includes("verifier:"));
-    assert.ok(text.includes("tools:"));
-    assert.ok(text.includes("Delegate with:"));
-  });
-
-  it("/agents builder shows detailed builder profile", async () => {
-    const pi = createMockPi();
-    extensionFactory(pi);
-
-    const cmd = pi.commands.find((c) => c.name === "agents")!;
-    await cmd.def.handler("builder", createMockContext());
-
-    assert.equal(pi.messages.length, 1);
-    assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
-    const text = pi.messages[0].content[0].text as string;
-    assert.ok(text.includes("Agent: builder"));
-    assert.ok(text.includes("Builder Worker Contract"));
-    assert.ok(text.includes('Delegate with: `delegate_task` using profileName "builder" etc.'));
-  });
-
-  it("/agents unknown returns a friendly not found message", async () => {
-    const pi = createMockPi();
-    extensionFactory(pi);
-
-    const cmd = pi.commands.find((c) => c.name === "agents")!;
-    await cmd.def.handler("unknown", createMockContext());
-
-    assert.equal(pi.messages.length, 1);
-    assert.equal(pi.messages[0].customType, "pi-agents-team/agents-list");
-    const text = pi.messages[0].content[0].text as string;
-    assert.ok(text.includes('Agent "unknown" not found.'));
-    assert.ok(text.includes("Available agents:"));
-    assert.ok(text.includes("builder"));
+  it("orchestrator system prompt carries the authoritative agent discovery block", () => {
+    // The /agents command used to duplicate the agent list as a manual
+    // slash command. The command has been removed because the same
+    // information is already in the orchestrator's system prompt on every
+    // before_agent_start — that is the authoritative discovery surface
+    // and the one that drives delegation decisions. This test pins that
+    // contract: every agent's name and description must appear in the
+    // injected block, alongside the delegate_task usage hint.
+    const agents = _testing.discoverAgents(process.cwd());
+    const block = _testing.buildAgentPromptBlock(agents);
+    assert.match(block, /## Available team agents/);
+    assert.match(block, /builder: Implement code/);
+    assert.match(block, /verifier: Independent validation/);
+    assert.match(block, /archivist: Maintain the durable record/);
+    assert.match(block, /dispatcher: Classify incoming work/);
+    assert.match(block, /researcher: Gather local and web context/);
+    assert.match(block, /runtime: Operate live systems/);
+    assert.match(
+      block,
+      /Use the `delegate_task` tool to assign work to one of these agents\./,
+    );
   });
 
   it("buildWorkerTaskText prepends the final-answer contract instruction", () => {
@@ -1083,8 +1062,10 @@ describe("Path A thin extension shell", () => {
       // Either we found package agents (the package dir is part of the
       // extension's lookup, so we always find them in the test environment)
       // or the empty-state message is shown. Either way, the widget must
-      // not throw and must include the hint line.
-      assert.ok(lines.some((l) => l.includes("/agents")), "should include the /agents hint");
+      // not throw. The previous `/agents` hint line is intentionally
+      // absent: the command has been removed, so the widget must not
+      // advertise a non-existent slash command.
+      assert.ok(!lines.some((l) => l.includes("/agents")), "should not advertise the removed /agents command");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
