@@ -1,0 +1,205 @@
+{
+  "schema": "prototype-v2-rendered-grid/v1",
+  "generatedAt": "2023-11-14T22:13:20.000Z",
+  "widths": [
+    80,
+    100,
+    120
+  ],
+  "snapshots": {
+    "idle": "Idle — no workers, no memory. Fresh-session baseline.",
+    "one-running": "One running — single in-flight builder on a flaky-test task.",
+    "busy": "Busy — three active workers, three recent (mixed outcomes), memory with non-zero byMarker."
+  },
+  "entries": [
+    {
+      "snapshotId": "idle",
+      "width": 80,
+      "description": "Idle — no workers, no memory. Fresh-session baseline.",
+      "lineCount": 4,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "idle",
+      "width": 100,
+      "description": "Idle — no workers, no memory. Fresh-session baseline.",
+      "lineCount": 4,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "idle",
+      "width": 120,
+      "description": "Idle — no workers, no memory. Fresh-session baseline.",
+      "lineCount": 4,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "one-running",
+      "width": 80,
+      "description": "One running — single in-flight builder on a flaky-test task.",
+      "lineCount": 9,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents · 1 active",
+        "",
+        "Active workers (1):",
+        "  ● builder — \"Investigate flaky test in shell.test.ts\" · 47s",
+        "",
+        "Totals: 1 · done: 0 · failed: 0",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "one-running",
+      "width": 100,
+      "description": "One running — single in-flight builder on a flaky-test task.",
+      "lineCount": 9,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents · 1 active",
+        "",
+        "Active workers (1):",
+        "  ● builder — \"Investigate flaky test in shell.test.ts\" · 47s",
+        "",
+        "Totals: 1 · done: 0 · failed: 0",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "one-running",
+      "width": 120,
+      "description": "One running — single in-flight builder on a flaky-test task.",
+      "lineCount": 9,
+      "longestLineCols": 74,
+      "lines": [
+        "Pi Agents Team — 6 agents · 1 active",
+        "",
+        "Active workers (1):",
+        "  ● builder — \"Investigate flaky test in shell.test.ts\" · 47s",
+        "",
+        "Totals: 1 · done: 0 · failed: 0",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "busy",
+      "width": 80,
+      "description": "Busy — three active workers, three recent (mixed outcomes), memory with non-zero byMarker.",
+      "lineCount": 23,
+      "longestLineCols": 76,
+      "lines": [
+        "Pi Agents Team — 6 agents · 3 active",
+        "",
+        "Active workers (3):",
+        "  ● builder — \"Implement parity data structure\" · 2m",
+        "  ● verifier — \"Wire assertions guard into dispatcher\" · 1m35s",
+        "  ● researcher — \"Aggregate per-profile cost from events.ndjson\" · 3m",
+        "",
+        "Recent (last 3):",
+        "  ✓ builder — \"Refactor worker-spawn IPC envelope\" · 2m · completed",
+        "  ✓ verifier — \"Cross-check buildWidgetLines cap behaviour\" · 3m · completed",
+        "  ✗ archivist — \"Append-only migration notes from old ledger\" · 3m · error",
+        "  totals: 6 · done: 2 · failed: 1",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        "",
+        "Memory: ok (2 skipped)",
+        "  blocked goals: 2",
+        "  byMarker:",
+        "    [action]: 6 (5 ok, 1 err)",
+        "  ! [closure]: 2 (2 skip)",
+        "    [recorded]: 1 (1 ok)",
+        "    [routing]: 3 (3 ok)",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "busy",
+      "width": 100,
+      "description": "Busy — three active workers, three recent (mixed outcomes), memory with non-zero byMarker.",
+      "lineCount": 23,
+      "longestLineCols": 76,
+      "lines": [
+        "Pi Agents Team — 6 agents · 3 active",
+        "",
+        "Active workers (3):",
+        "  ● builder — \"Implement parity data structure\" · 2m",
+        "  ● verifier — \"Wire assertions guard into dispatcher\" · 1m35s",
+        "  ● researcher — \"Aggregate per-profile cost from events.ndjson\" · 3m",
+        "",
+        "Recent (last 3):",
+        "  ✓ builder — \"Refactor worker-spawn IPC envelope\" · 2m · completed",
+        "  ✓ verifier — \"Cross-check buildWidgetLines cap behaviour\" · 3m · completed",
+        "  ✗ archivist — \"Append-only migration notes from old ledger\" · 3m · error",
+        "  totals: 6 · done: 2 · failed: 1",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        "",
+        "Memory: ok (2 skipped)",
+        "  blocked goals: 2",
+        "  byMarker:",
+        "    [action]: 6 (5 ok, 1 err)",
+        "  ! [closure]: 2 (2 skip)",
+        "    [recorded]: 1 (1 ok)",
+        "    [routing]: 3 (3 ok)",
+        ""
+      ]
+    },
+    {
+      "snapshotId": "busy",
+      "width": 120,
+      "description": "Busy — three active workers, three recent (mixed outcomes), memory with non-zero byMarker.",
+      "lineCount": 23,
+      "longestLineCols": 76,
+      "lines": [
+        "Pi Agents Team — 6 agents · 3 active",
+        "",
+        "Active workers (3):",
+        "  ● builder — \"Implement parity data structure\" · 2m",
+        "  ● verifier — \"Wire assertions guard into dispatcher\" · 1m35s",
+        "  ● researcher — \"Aggregate per-profile cost from events.ndjson\" · 3m",
+        "",
+        "Recent (last 3):",
+        "  ✓ builder — \"Refactor worker-spawn IPC envelope\" · 2m · completed",
+        "  ✓ verifier — \"Cross-check buildWidgetLines cap behaviour\" · 3m · completed",
+        "  ✗ archivist — \"Append-only migration notes from old ledger\" · 3m · error",
+        "  totals: 6 · done: 2 · failed: 1",
+        "",
+        "Agents: dispatcher · researcher · verifier · builder · archivist · runtime",
+        "",
+        "Memory: ok (2 skipped)",
+        "  blocked goals: 2",
+        "  byMarker:",
+        "    [action]: 6 (5 ok, 1 err)",
+        "  ! [closure]: 2 (2 skip)",
+        "    [recorded]: 1 (1 ok)",
+        "    [routing]: 3 (3 ok)",
+        ""
+      ]
+    }
+  ]
+}
