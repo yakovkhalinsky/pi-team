@@ -8,7 +8,8 @@ node_modules/
 .pi-team/*
 !.pi-team/reference/
 !.pi-team/reference/*.md
-.pi-team/worktrees/
+.pi-team.worktrees/
+.pi-team.backup.*/
 .pi/agent/*-agents-team.json
 !.pi/agent/agents-team.json
 .pi/agent/agents-team.json.backup.*
