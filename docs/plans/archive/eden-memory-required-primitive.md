@@ -1,7 +1,8 @@
-# Plan: eden-memory as a required primitive
+# Plan: eden-memory as a required primitive (ARCHIVED — superseded)
 
 **Date:** 2026-08-23
-**Status:** Draft for review
+**Status:** Archived. **Superseded by** [`config-review-eden-memory-required.md`](./config-review-eden-memory-required.md), which shipped in commit `101660f` on 2026-08-23. This draft is kept for historical reference only.
+
 **Predecessor:** `b499a1d` (moves 1-6), `30db698` (move 7 docs), `d301ba9` (Stage 6 note + worktree cleanup)
 
 ## Context
