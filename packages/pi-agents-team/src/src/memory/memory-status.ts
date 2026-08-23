@@ -55,9 +55,8 @@ function emptyByMarker() {
  * Callers may mutate this object directly; the ATP recorder updates it
  * in place as lifecycle markers are written.
  */
-export function createWorkerEdenMemoryStatus(enabled) {
+export function createWorkerEdenMemoryStatus() {
   return {
-    enabled,
     healthy: undefined,
     recordsWritten: 0,
     recordsFailed: 0,
@@ -65,20 +64,8 @@ export function createWorkerEdenMemoryStatus(enabled) {
     lastError: undefined,
     lastHealthCheckAt: undefined,
     lastWriteAt: undefined,
-    byMarker: enabled ? emptyByMarker() : undefined,
+    byMarker: emptyByMarker(),
   };
-}
-
-/**
- * Ensure a worker state carries an enabled eden-memory status when memory
- * is configured. Safe to call repeatedly; preserves an existing enabled status.
- */
-export function ensureWorkerEdenMemoryStatus(worker, config) {
-  const enabled = config?.memory?.edenMemory?.enabled === true;
-  if (!enabled) return;
-  if (!worker.edenMemoryStatus || worker.edenMemoryStatus.enabled !== true) {
-    worker.edenMemoryStatus = createWorkerEdenMemoryStatus(true);
-  }
 }
 
 /**
@@ -90,7 +77,6 @@ export function ensureWorkerEdenMemoryStatus(worker, config) {
  */
 export function createMemoryStatusTracker(options) {
   const status = {
-    enabled: options.enabled,
     healthy: undefined,
     recordsWritten: 0,
     recordsFailed: 0,
@@ -98,7 +84,7 @@ export function createMemoryStatusTracker(options) {
     lastError: undefined,
     lastHealthCheckAt: undefined,
     lastWriteAt: undefined,
-    byMarker: options.enabled ? emptyByMarker() : undefined,
+    byMarker: emptyByMarker(),
   };
 
   let timer;
@@ -126,7 +112,7 @@ export function createMemoryStatusTracker(options) {
   }
 
   async function runHealthCheck() {
-    if (!options.enabled || !options.health || runningHealthCheck) return;
+    if (!options.health || runningHealthCheck) return;
     if (healthController.signal.aborted) return;
     runningHealthCheck = true;
     const localController = new AbortController();
@@ -168,7 +154,7 @@ export function createMemoryStatusTracker(options) {
   }
 
   function startPolling() {
-    if (timer || !options.enabled || !options.health) return;
+    if (timer || !options.health) return;
     if (healthController.signal.aborted) {
       healthController = new AbortController();
     }
@@ -197,7 +183,7 @@ export function createMemoryStatusTracker(options) {
  *   error → warning (last error) → skipped (last write) → ok → unknown
  */
 export function getMemoryStatusGlyph(status) {
-  if (!status || !status.enabled) return "";
+  if (!status) return "";
   if (status.healthy === false) return "✗";
   if (status.lastResult === "error") return "✗";
   if (status.lastError) return "⚠";
@@ -211,7 +197,7 @@ export function getMemoryStatusGlyph(status) {
  * Never includes record content.
  */
 export function formatMemoryStatusFragment(status) {
-  if (!status || !status.enabled) return "";
+  if (!status) return "";
   const glyph = getMemoryStatusGlyph(status);
   const parts = [];
   if (status.healthy === false) parts.push("unhealthy");
@@ -228,7 +214,7 @@ export function formatMemoryStatusFragment(status) {
  * derived counters. Safe to call with undefined/disabled status.
  */
 export function recordEdenMemoryMarker(status, result) {
-  if (!status || !status.enabled) return;
+  if (!status) return;
   const ts = result.ts ?? nowMs();
   const event = {
     markerName: result.markerName,
@@ -301,9 +287,9 @@ export function formatEdenMemoryEvent(event) {
  */
 export function aggregateEdenMemoryStatus(teamStatus, workers) {
   const statuses = [];
-  if (teamStatus && teamStatus.enabled) statuses.push(teamStatus);
+  if (teamStatus) statuses.push(teamStatus);
   for (const worker of workers ?? []) {
-    if (worker.edenMemoryStatus && worker.edenMemoryStatus.enabled) {
+    if (worker.edenMemoryStatus) {
       statuses.push(worker.edenMemoryStatus);
     }
   }
@@ -330,7 +316,6 @@ export function aggregateEdenMemoryStatus(teamStatus, workers) {
   }
 
   return {
-    enabled: true,
     recordsWritten: totals.ok,
     recordsFailed: totals.error,
     recordsSkipped: totals.skipped,

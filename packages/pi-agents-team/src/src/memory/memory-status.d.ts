@@ -43,7 +43,6 @@ export interface EdenMemoryHealthResult {
 }
 
 export interface EdenMemoryStatus {
-  enabled: boolean;
   healthy: boolean | undefined;
   recordsWritten: number;
   recordsFailed: number;
@@ -60,7 +59,6 @@ export interface EdenMemoryStatus {
 }
 
 export interface EdenMemoryAggregateStatus {
-  enabled: true;
   recordsWritten: number;
   recordsFailed: number;
   recordsSkipped: number;
@@ -71,7 +69,6 @@ export interface EdenMemoryAggregateStatus {
 }
 
 export interface MemoryStatusTrackerOptions {
-  enabled: boolean;
   health?: (
     options?: Record<string, unknown>,
     signal?: AbortSignal,
@@ -91,11 +88,7 @@ export interface MemoryStatusTracker {
 }
 
 export declare function createMemoryStatusTracker(options: MemoryStatusTrackerOptions): MemoryStatusTracker;
-export declare function createWorkerEdenMemoryStatus(enabled: boolean): EdenMemoryStatus;
-export declare function ensureWorkerEdenMemoryStatus(
-  worker: { edenMemoryStatus?: EdenMemoryStatus },
-  config: { memory?: { edenMemory?: { enabled?: boolean } } } | undefined,
-): void;
+export declare function createWorkerEdenMemoryStatus(): EdenMemoryStatus;
 export declare function getMemoryStatusGlyph(status: EdenMemoryStatus | undefined): string;
 export declare function formatMemoryStatusFragment(status: EdenMemoryStatus | undefined): string;
 export declare function recordEdenMemoryMarker(status: EdenMemoryStatus | undefined, result: EdenMemoryMarkerResult): void;

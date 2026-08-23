@@ -9,7 +9,6 @@ import { resolve } from "node:path";
  */
 export const EDEN_ENV_FIELDS = {
   BIN: "EDEN_MEMORY_BIN",
-  ENABLED: "EDEN_MEMORY_ENABLED",
   DB: "EDEN_MEMORY_DB",
   WORKSPACE_ID: "EDEN_WORKSPACE_ID",
   USER_ID: "EDEN_USER_ID",
@@ -30,7 +29,6 @@ export const EDEN_DEFAULTS = {
   workspaceId: "default",
   userId: "yakov",
   agentId: "pi-agents-team",
-  enabled: "true",
   semanticSearch: "false",
 };
 
@@ -162,11 +160,6 @@ function tryParseJson(text) {
   } catch {
     return undefined;
   }
-}
-
-function parseEnabledFlag(value) {
-  const normalized = (value ?? "").toLowerCase();
-  return !(normalized === "false" || normalized === "0" || normalized === "no");
 }
 
 function parseSemanticSearchFlag(value) {
@@ -358,7 +351,6 @@ export function resolveEdenOptions(env = process.env) {
     agentId: env[EDEN_ENV_FIELDS.AGENT_ID] ?? EDEN_DEFAULTS.agentId,
     llmApiKey: env[EDEN_ENV_FIELDS.LLM_API_KEY],
     llmBaseUrl: env[EDEN_ENV_FIELDS.LLM_BASE_URL],
-    enabled: parseEnabledFlag(env[EDEN_ENV_FIELDS.ENABLED]),
     semanticSearch: parseSemanticSearchFlag(env[EDEN_ENV_FIELDS.SEMANTIC_SEARCH]),
   };
 }

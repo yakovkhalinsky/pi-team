@@ -9,7 +9,6 @@ export interface EdenMemoryOptions {
   llmBaseUrl?: string;
   logLevel?: string;
   logFormat?: "text" | "json";
-  enabled?: boolean;
   semanticSearch?: boolean;
 }
 
@@ -68,7 +67,6 @@ export interface EdenHealthResult {
 
 export type EdenEnvFieldName =
   | "EDEN_MEMORY_BIN"
-  | "EDEN_MEMORY_ENABLED"
   | "EDEN_MEMORY_DB"
   | "EDEN_WORKSPACE_ID"
   | "EDEN_USER_ID"
@@ -88,7 +86,6 @@ export const EDEN_DEFAULTS: {
   workspaceId: string;
   userId: string;
   agentId: string;
-  enabled: string;
   semanticSearch: string;
 };
 

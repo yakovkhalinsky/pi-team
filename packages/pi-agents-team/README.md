@@ -6,27 +6,27 @@ The orchestrator discovers role profiles from project-scope `.pi/agents/*.md` (w
 
 ## Team UI
 
-The extension is always visible:
+The extension is always visible when the team is loaded. There is no toggle.
 
-- **Footer status** — A persistent one-liner in the TUI footer such as `● Team (6 agents)` or `● Team (1 running: builder)`. Renders via `ctx.ui.setStatus` and updates on every state change.
-- **`/team` command** — Toggles a multi-line panel below the editor listing discovered agents, currently running workers, and the eden-memory status / byMarker histogram (when memory is enabled). Renders via `ctx.ui.setWidget` with `placement: "belowEditor"`.
+- **Footer status** — A persistent one-liner in the TUI footer such as `● Team (6 agents)` or `Team — builder working on "fix bug" · 2m`. Renders via `ctx.ui.setStatus` and updates on every state change.
+- **Widget panel** — A multi-line panel below the editor listing active workers, recent terminal workers, the agent roster, and the eden-memory status / byMarker histogram. Renders via `ctx.ui.setWidget` with `placement: "belowEditor"`.
 - **Per-tool feedback** — The footer status and the panel both update live as workers are spawned, complete, error out, or are aborted. No need to type a command to see what's happening.
 
+When eden-memory is unreachable, the team falls back gracefully: a one-line footer status reads `Team unavailable — eden-memory unreachable`, a `ctx.ui.notify` is fired, and the orchestrator sees a normal pi session with no team tools. Fix the binary path (or install eden-memory) and restart pi.
+
 ```
-/team      # toggle the team panel below the editor (agent list, running workers, memory)
 /agents    # list discovered agents (or show details: /agents <name>)
 ```
 
 ## What remains
 
-- `/team` slash command — toggle the on-screen team panel.
 - `/agents` slash command — list discovered agent profiles.
 - `delegate_task` tool — spawn a worker Pi process for a profile and return its final answer.
 - `wait_for_agents` tool — poll tracked workers until they are terminal, time out, or raise a relay question.
 - `abort_worker` tool — terminate a running worker.
 - `/stop-worker <workerId>` command — abort a worker by id.
 - In-memory worker state with best-effort `pi.appendEntry` persistence.
-- Eden-memory ATP integration (optional) — when `EDEN_MEMORY_ENABLED=true` and the required env fields are configured, the extension records lifecycle markers on `session_start`, `delegate_task`, and worker completion, runs a startup check for blocked/unfinished goals, and surfaces a per-marker histogram in both the team panel and every `delegate_task` / `wait_for_agents` tool result. See [docs/memory.md](./docs/memory.md).
+- Eden-memory ATP integration — required. When the binary is reachable, the extension records lifecycle markers on `session_start`, `delegate_task`, and worker completion, runs a startup check for blocked/unfinished goals, and surfaces a per-marker histogram in both the team panel and every `delegate_task` / `wait_for_agents` tool result. When the binary is unreachable, the team falls back to a normal pi session. See [docs/memory.md](./docs/memory.md).
 - Plain-JS source that ships as native ESM.
 
 ## What was removed

@@ -1,7 +1,7 @@
 # Plan: eden-memory and the team as built-in primitives (no opt-out)
 
 **Date:** 2026-08-23
-**Status:** Revised for review
+**Status:** Implemented
 **Predecessor:** `ac33610` (team-status widget), `8a090c9` (BUG-005)
 **Resolves:** the user's three requirements, sharpened: "you require eden-memory, you require the whole team, simply remove the code that handles 'config' and just build it in."
 **Supersedes:** the prior draft at this path (which proposed fail-fast and an opt-out). This revision: graceful fallback to a normal pi session with a message; widget is always on when the team is up.

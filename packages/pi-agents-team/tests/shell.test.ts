@@ -161,7 +161,6 @@ function setEdenEnv(bin: string): void {
   process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
   process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
   process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
-  process.env[EDEN_ENV_FIELDS.ENABLED] = "true";
 }
 
 describe("Path A thin extension shell", () => {
@@ -169,6 +168,7 @@ describe("Path A thin extension shell", () => {
 
   beforeEach(() => {
     _testing.clearWorkers();
+    _testing.setTeamLoaded(true);
   });
 
   afterEach(() => {
@@ -203,6 +203,11 @@ describe("Path A thin extension shell", () => {
     const stopCmd = pi.commands.find((c) => c.name === "stop-worker");
     assert.ok(stopCmd, "/stop-worker command should be registered");
     assert.ok(stopCmd!.def.handler, "/stop-worker command should have a handler");
+
+    // The /team toggle command is gone: the widget is always on when the
+    // team is loaded and never rendered otherwise.
+    const teamCmd = pi.commands.find((c) => c.name === "team");
+    assert.equal(teamCmd, undefined, "/team command should NOT be registered");
   });
 
   it("records a state entry on load and session_start", () => {
@@ -778,17 +783,6 @@ describe("Path A thin extension shell", () => {
     assert.equal(bad!.error, "validation failed");
   });
 
-  it("does not run eden-memory startup work when disabled", async () => {
-    const pi = createMockPi();
-    extensionFactory(pi);
-
-    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
-    await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
-
-    const memoryEntries = pi.entries.filter((e) => e.type.startsWith("pi-agents-team/memory"));
-    assert.equal(memoryEntries.length, 0, "should not write memory entries when disabled");
-  });
-
   it("records eden-memory health, goal-receipt and blocked goals on session_start when enabled", async () => {
     fakeEden = makeFakeEdenBin();
     setEdenEnv(fakeEden.bin);
@@ -893,6 +887,8 @@ describe("Path A thin extension shell", () => {
   // ─── Team-status widget ──────────────────────────────────────────────────
 
   it("session_start sets a footer status with team name and agent count", async () => {
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
     const pi = createMockPi();
     extensionFactory(pi);
 
@@ -907,79 +903,38 @@ describe("Path A thin extension shell", () => {
     assert.match(last.value, /Team \(\d+ agents?\)/);
     assert.match(last.value, /6 agents?/, "should reflect the six discovered agents");
 
-    // Widget is not shown by default; the most recent setWidget call should
-    // be a clear (undefined).
+    // Widget is rendered automatically when the team is loaded. The most
+    // recent setWidget call should be an array of strings (the panel lines).
     const widgetCalls = (ctx as any).__test.setWidgetCalls;
-    if (widgetCalls.length > 0) {
-      const lastWidget = widgetCalls[widgetCalls.length - 1];
-      assert.equal(lastWidget.key, _testing.TEAM_WIDGET_KEY);
-      assert.equal(lastWidget.value, undefined, "widget should be hidden by default");
-    }
+    const lastWidget = widgetCalls[widgetCalls.length - 1];
+    assert.equal(lastWidget.key, _testing.TEAM_WIDGET_KEY);
+    assert.ok(Array.isArray(lastWidget.value), "widget should be rendered when team is loaded");
   });
 
   it("session_shutdown clears the footer status and the widget", async () => {
-    // Disable eden-memory for this test: the session_shutdown handler awaits
-    // the in-flight startup work, which can take ~15s if eden-memory is
-    // enabled but unreachable.
-    process.env[EDEN_ENV_FIELDS.ENABLED] = "false";
-    try {
-      const pi = createMockPi();
-      extensionFactory(pi);
-
-      const ctx = createMockContext({ hasUI: true });
-      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
-      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
-      (ctx as any).__test.setStatusCalls.length = 0;
-      (ctx as any).__test.setWidgetCalls.length = 0;
-
-      const shutdownHandlers = pi.handlers.get("session_shutdown") ?? [];
-      await shutdownHandlers[0]({ reason: "quit" }, ctx);
-
-      const setStatusCalls = (ctx as any).__test.setStatusCalls;
-      const clearStatus = setStatusCalls.find((c: any) => c.value === undefined);
-      assert.ok(clearStatus, "setStatus should be cleared on shutdown");
-
-      const setWidgetCalls = (ctx as any).__test.setWidgetCalls;
-      const clearWidget = setWidgetCalls.find((c: any) => c.value === undefined);
-      assert.ok(clearWidget, "setWidget should be cleared on shutdown");
-    } finally {
-      delete process.env[EDEN_ENV_FIELDS.ENABLED];
-    }
-  });
-
-  it("/team command toggles the widget visibility", async () => {
+    // Use the fake eden-memory bin so the team loads cleanly. We use
+    // clearWorkers/setStatusCalls to focus on the shutdown UI clearing.
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
     const pi = createMockPi();
     extensionFactory(pi);
 
     const ctx = createMockContext({ hasUI: true });
     const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
     await sessionStartHandlers[0]({ reason: "startup" }, ctx);
-
-    const teamCmd = pi.commands.find((c) => c.name === "team");
-    assert.ok(teamCmd, "/team command should be registered");
-
-    // Toggle on.
+    (ctx as any).__test.setStatusCalls.length = 0;
     (ctx as any).__test.setWidgetCalls.length = 0;
-    await teamCmd!.def.handler("", ctx);
-    let widgetCalls = (ctx as any).__test.setWidgetCalls;
-    let lastWidget = widgetCalls[widgetCalls.length - 1];
-    assert.equal(lastWidget.key, _testing.TEAM_WIDGET_KEY);
-    assert.ok(Array.isArray(lastWidget.value), "widget lines should be an array");
-    assert.equal(lastWidget.options?.placement, "belowEditor");
 
-    // Toggle off.
-    (ctx as any).__test.setWidgetCalls.length = 0;
-    await teamCmd!.def.handler("", ctx);
-    widgetCalls = (ctx as any).__test.setWidgetCalls;
-    lastWidget = widgetCalls[widgetCalls.length - 1];
-    assert.equal(lastWidget.value, undefined, "widget should be hidden on second toggle");
+    const shutdownHandlers = pi.handlers.get("session_shutdown") ?? [];
+    await shutdownHandlers[0]({ reason: "quit" }, ctx);
 
-    // /team on explicitly.
-    (ctx as any).__test.setWidgetCalls.length = 0;
-    await teamCmd!.def.handler("on", ctx);
-    widgetCalls = (ctx as any).__test.setWidgetCalls;
-    lastWidget = widgetCalls[widgetCalls.length - 1];
-    assert.ok(Array.isArray(lastWidget.value), "/team on should show the panel");
+    const setStatusCalls = (ctx as any).__test.setStatusCalls;
+    const clearStatus = setStatusCalls.find((c: any) => c.value === undefined);
+    assert.ok(clearStatus, "setStatus should be cleared on shutdown");
+
+    const setWidgetCalls = (ctx as any).__test.setWidgetCalls;
+    const clearWidget = setWidgetCalls.find((c: any) => c.value === undefined);
+    assert.ok(clearWidget, "setWidget should be cleared on shutdown");
   });
 
   it("status line reflects running workers during delegate_task lifecycle", async () => {
@@ -1051,7 +1006,7 @@ describe("Path A thin extension shell", () => {
     assert.doesNotMatch(String(last.value), /running/);
   });
 
-  it("widget lists discovered agents when toggled on", async () => {
+  it("widget lists discovered agents when loaded", async () => {
     const pi = createMockPi();
     extensionFactory(pi);
 
@@ -1059,10 +1014,8 @@ describe("Path A thin extension shell", () => {
     const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
     await sessionStartHandlers[0]({ reason: "startup" }, ctx);
 
-    const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
-    (ctx as any).__test.setWidgetCalls.length = 0;
-    await teamCmd.handler("", ctx);
-
+    // Widget is rendered automatically by session_start when the team is
+    // loaded — no /team toggle required.
     const widgetCalls = (ctx as any).__test.setWidgetCalls;
     const last = widgetCalls[widgetCalls.length - 1];
     const lines: string[] = last.value;
@@ -1070,32 +1023,6 @@ describe("Path A thin extension shell", () => {
     assert.ok(lines.some((l) => l.includes("builder")), "should list builder");
     assert.ok(lines.some((l) => l.includes("verifier")), "should list verifier");
     assert.ok(lines.some((l) => l.includes("Memory:")), "should have a memory line");
-  });
-
-  it("widget says memory: disabled when eden-memory is not enabled", async () => {
-    // The eden-memory enabled flag defaults to true when unset (documented
-    // package contract). Explicitly disable it for this test.
-    process.env[EDEN_ENV_FIELDS.ENABLED] = "false";
-    try {
-      const pi = createMockPi();
-      extensionFactory(pi);
-
-      const ctx = createMockContext({ hasUI: true });
-      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
-      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
-
-      const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
-      (ctx as any).__test.setWidgetCalls.length = 0;
-      await teamCmd.handler("", ctx);
-
-      const widgetCalls = (ctx as any).__test.setWidgetCalls;
-      const last = widgetCalls[widgetCalls.length - 1];
-      const lines: string[] = last.value;
-      assert.ok(lines.some((l) => /Memory: disabled/.test(l)), "should say memory: disabled");
-      assert.ok(!lines.some((l) => /byMarker/.test(l)), "should not render byMarker when memory is disabled");
-    } finally {
-      delete process.env[EDEN_ENV_FIELDS.ENABLED];
-    }
   });
 
   it("widget does not throw and stays minimal when no agents are discovered", async () => {
@@ -1109,10 +1036,6 @@ describe("Path A thin extension shell", () => {
       const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
       await sessionStartHandlers[0]({ reason: "startup" }, ctx);
 
-      const teamCmd = pi.commands.find((c) => c.name === "team")!.def;
-      (ctx as any).__test.setWidgetCalls.length = 0;
-      await teamCmd.handler("", ctx);
-
       const widgetCalls = (ctx as any).__test.setWidgetCalls;
       const last = widgetCalls[widgetCalls.length - 1];
       const lines: string[] = last.value;
@@ -1120,7 +1043,7 @@ describe("Path A thin extension shell", () => {
       // extension's lookup, so we always find them in the test environment)
       // or the empty-state message is shown. Either way, the widget must
       // not throw and must include the hint line.
-      assert.ok(lines.some((l) => l.includes("/team")), "should include the /team hint");
+      assert.ok(lines.some((l) => l.includes("/agents")), "should include the /agents hint");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1341,7 +1264,6 @@ describe("Path A thin extension shell", () => {
     const workers = new Map<string, any>();
     const fakeTracker = {
       status: {
-        enabled: true,
         healthy: true,
         byMarker: {},
       },
@@ -1357,7 +1279,6 @@ describe("Path A thin extension shell", () => {
     const workers = new Map<string, any>();
     const fakeTracker = {
       status: {
-        enabled: true,
         healthy: false,
         lastError: "eden-memory unreachable",
         byMarker: {},
@@ -1374,7 +1295,6 @@ describe("Path A thin extension shell", () => {
     const workers = new Map<string, any>();
     const fakeTracker = {
       status: {
-        enabled: true,
         // healthy is intentionally undefined: the tracker exists but the
         // first health check has not yet landed.
         byMarker: {},
@@ -1407,5 +1327,120 @@ describe("Path A thin extension shell", () => {
     await sessionStartHandlers[0]({ reason: "startup" }, ctx);
 
     assert.equal(_testing.getWorkerMap().size, 0, "session_start should clear stale workers");
+  });
+
+  it("session_start falls back gracefully when eden-memory is unreachable", async () => {
+    // Point EDEN_MEMORY_BIN at a non-existent file so the health check
+    // returns ok: false. No setEdenEnv() — we leave the defaults but force
+    // the binary to be missing.
+    const missingBin = "/does/not/exist/eden-memory-fallback-test";
+    process.env[EDEN_ENV_FIELDS.BIN] = missingBin;
+    process.env[EDEN_ENV_FIELDS.DB] = "/tmp/not-used.db";
+    process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
+    process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
+    process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
+
+    try {
+      const pi = createMockPi();
+      extensionFactory(pi);
+
+      const ctx = createMockContext({ hasUI: true });
+      const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+      await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+      // (a) Tools are still registered at the top level (we chose the
+      //     early-return approach over moving registration inside
+      //     session_start, per the plan's intent).
+      const toolNames = pi.tools.map((t) => t.name).sort();
+      assert.deepEqual(toolNames, ["abort_worker", "delegate_task", "wait_for_agents"]);
+
+      // (b) /team command is gone.
+      assert.equal(pi.commands.find((c) => c.name === "team"), undefined);
+
+      // (c) A fatal memory-status entry was appended.
+      const fatal = pi.entries.find(
+        (e) => e.type === "pi-agents-team/memory-status" && e.data?.level === "fatal",
+      );
+      assert.ok(fatal, "should append a fatal memory-status entry on fallback");
+      assert.match(String(fatal!.data.message), /eden-memory unreachable/);
+
+      // (d) Footer status carries the unavailability message.
+      const statusCalls = (ctx as any).__test.setStatusCalls;
+      const lastStatus = statusCalls[statusCalls.length - 1];
+      assert.match(String(lastStatus.value), /unreachable/i);
+
+      // (e) A notify was emitted.
+      const notifs = (ctx as any).__test.notifs;
+      assert.ok(
+        notifs.some((n: any) => /unreachable/i.test(n.message) && n.level === "error"),
+        "should notify the user about the unavailability",
+      );
+
+      // (f) teamLoaded stays false — tools/commands early-return.
+      const delegate = pi.tools.find((t) => t.name === "delegate_task")!.def;
+      const result = await delegate.execute("tc-1", { profileName: "builder", title: "T" }, undefined, undefined, ctx);
+      assert.ok(result.isError, "delegate_task should refuse to run when team is not loaded");
+      assert.match(String(result.content?.[0]?.text ?? ""), /unreachable/i);
+    } finally {
+      // Restore process.env via afterEach; nothing to do here.
+    }
+  });
+
+  it("session_start falls back gracefully when eden-memory binary is missing", async () => {
+    // Same shape as the unreachable test but with a deliberately missing
+    // EDEN_MEMORY_BIN.
+    process.env[EDEN_ENV_FIELDS.BIN] = "/definitely/not/here/eden-memory";
+    process.env[EDEN_ENV_FIELDS.DB] = "/tmp/not-used.db";
+    process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
+    process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
+    process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
+
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const fatal = pi.entries.find(
+      (e) => e.type === "pi-agents-team/memory-status" && e.data?.level === "fatal",
+    );
+    assert.ok(fatal, "should append a fatal memory-status entry when binary is missing");
+  });
+
+  it("session_start renders the widget when the team is loaded", async () => {
+    fakeEden = makeFakeEdenBin();
+    setEdenEnv(fakeEden.bin);
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const widgetCalls = (ctx as any).__test.setWidgetCalls;
+    const last = widgetCalls[widgetCalls.length - 1];
+    assert.equal(last.key, _testing.TEAM_WIDGET_KEY);
+    assert.ok(Array.isArray(last.value), "widget should render array of lines when team is loaded");
+  });
+
+  it("session_start does not render the widget when the team falls back", async () => {
+    process.env[EDEN_ENV_FIELDS.BIN] = "/does/not/exist/eden-memory-widget-fallback";
+    process.env[EDEN_ENV_FIELDS.DB] = "/tmp/not-used.db";
+    process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
+    process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
+    process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
+
+    const pi = createMockPi();
+    extensionFactory(pi);
+
+    const ctx = createMockContext({ hasUI: true });
+    const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
+    await sessionStartHandlers[0]({ reason: "startup" }, ctx);
+
+    const widgetCalls = (ctx as any).__test.setWidgetCalls;
+    const last = widgetCalls[widgetCalls.length - 1];
+    assert.equal(last.key, _testing.TEAM_WIDGET_KEY);
+    assert.equal(last.value, undefined, "widget should be cleared when team falls back");
   });
 });

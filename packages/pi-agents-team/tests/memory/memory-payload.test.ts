@@ -13,7 +13,7 @@ import {
  * full extension lifecycle here — the shell.test.ts suite covers that — and
  * instead pin down the contract consumers depend on:
  *
- *   { enabled, byMarker, totals, recordsWritten/Failed/Skipped,
+ *   { byMarker, totals, recordsWritten/Failed/Skipped,
  *     healthy, lastError }
  *
  * `byMarker` is keyed by every marker in the canonical table, with
@@ -26,10 +26,9 @@ describe("memory block in tool payloads (contract)", () => {
   });
 
   it("aggregate produces byMarker keyed by every canonical marker with zeroed buckets", () => {
-    const team = createMemoryStatusTracker({ enabled: true }).status;
+    const team = createMemoryStatusTracker({}).status;
     const agg = aggregateEdenMemoryStatus(team, []);
     assert.ok(agg);
-    assert.equal(agg?.enabled, true);
     assert.ok(agg?.byMarker);
     // Every marker from the canonical table should be present with zeroed buckets.
     const expectedMarkers = [
@@ -46,11 +45,11 @@ describe("memory block in tool payloads (contract)", () => {
   });
 
   it("aggregate sums per-marker buckets across team + worker statuses", () => {
-    const team = createMemoryStatusTracker({ enabled: true }).status;
+    const team = createMemoryStatusTracker({}).status;
     recordEdenMemoryMarker(team, { markerName: "[goal-received]", ok: true });
     recordEdenMemoryMarker(team, { markerName: "[routing]", ok: true });
 
-    const w1 = createWorkerEdenMemoryStatus(true);
+    const w1 = createWorkerEdenMemoryStatus();
     recordEdenMemoryMarker(w1, { markerName: "[action]", ok: true });
     recordEdenMemoryMarker(w1, { markerName: "[action]", ok: true });
     recordEdenMemoryMarker(w1, { markerName: "[verdict]", ok: false, error: "x" });

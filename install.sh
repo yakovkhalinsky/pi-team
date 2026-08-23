@@ -160,15 +160,14 @@ fi
 # Check for existing installation
 PI_TEAM_DIR="${TARGET_DIR}/.pi-team"
 PI_CONFIG_DIR="${TARGET_DIR}/.pi/agent"
-PI_CONFIG_FILE="${PI_CONFIG_DIR}/agents-team.json"
 
 if [[ -d "${PI_TEAM_DIR}" && "${FORCE}" == "false" ]]; then
   die ".pi-team/ already exists. Use --force to overwrite."
 fi
 
-if [[ -f "${PI_CONFIG_FILE}" && "${FORCE}" == "false" ]]; then
-  warn ".pi/agent/agents-team.json already exists — backing up"
-  cp "${PI_CONFIG_FILE}" "${PI_CONFIG_FILE}.backup.$(date +%s)"
+if [[ -d "${PI_CONFIG_DIR}" && "${FORCE}" == "false" ]]; then
+  warn ".pi/agent/ already exists — backing up"
+  cp -r "${PI_CONFIG_DIR}" "${PI_CONFIG_DIR}.backup.$(date +%s)"
 fi
 
 ok "Target directory ready"
@@ -275,19 +274,10 @@ for f in "${SOURCE_DIR}"/bin/*.sh; do
 done
 ok "Helper scripts installed"
 
-# ─── Step 5: Create .pi/agent/agents-team.json ───────────────────────────────
-printf "\n${BOLD}Step 5: Creating pi agents-team config${NC}\n\n"
+# ─── Step 5: Update .gitignore ──────────────────────────────────────────────
+printf "\n${BOLD}Step 5: Updating .gitignore${NC}\n\n"
 
-if [[ -f "${PI_CONFIG_FILE}" && "${FORCE}" == "true" ]]; then
-  info "Overwriting agents-team.json (--force) — backing up first"
-  cp "${PI_CONFIG_FILE}" "${PI_CONFIG_FILE}.backup.$(date +%s)"
-fi
 
-cp "${SOURCE_DIR}/config/team.json" "${PI_CONFIG_FILE}"
-ok "Created ${PI_CONFIG_FILE}"
-
-# ─── Step 6: Update .gitignore ───────────────────────────────────────────────
-printf "\n${BOLD}Step 6: Updating .gitignore${NC}\n\n"
 
 GITIGNORE="${TARGET_DIR}/.gitignore"
 GITIGNORE_MARKER="# Pi Team runtime"
@@ -316,7 +306,7 @@ else
   ok "Updated .gitignore with .pi-team/ runtime entries"
 fi
 
-# ─── Step 7: Summary ─────────────────────────────────────────────────────────
+# ─── Step 6: Summary ───────────────────────────────────────────────
 printf "\n"
 printf "${BOLD}  ╔══════════════════════════════════════════════════╗${NC}\n"
 printf "${BOLD}  ║              Installation Complete!              ║${NC}\n"
@@ -332,7 +322,6 @@ printf "  ├── teams/*.md                       (6 paper-aligned team prese
 printf "  ├── config/                          (team.json, statuses.json, charter template)\n"
 printf "  ├── bin/                             (pi-team-init, pi-team-status, pi-team-cleanup)\n"
 printf "  └── workspace/                       (runtime workspace, git-ignored)\n"
-printf "  ${PI_CONFIG_FILE}        (pi agents-team config, schema v4)\n"
 printf "\n"
 
 printf "${BOLD}Next steps:${NC}\n"
@@ -342,8 +331,7 @@ printf "     cd ${TARGET_DIR}\n"
 printf "     pi\n"
 printf "\n"
 printf "  2. ${BOLD}Verify team mode is active${NC}\n"
-printf "     /team-enable on\n"
-printf "     /team              (open the dashboard)\n"
+printf "     /agents              (list the 6 discovered team agents)\n"
 printf "\n"
 printf "  3. ${BOLD}Scaffold a durable record${NC}\n"
 printf "     .pi-team/bin/pi-team-init.sh <team-name> <feature-id> [preset]\n"
@@ -353,7 +341,7 @@ printf "  4. ${BOLD}Give your team a goal${NC}\n"
 printf "     \"Plan a feature: add CSV export to the reports page.\"\n"
 printf "\n"
 printf "  5. ${BOLD}Customise roles${NC} (optional)\n"
-printf "     Edit .pi/agent/agents-team.json to:\n"
+printf "     Edit .pi/agents/*.md to:\n"
 printf "     - Rewrite the whenToUse trigger sentence per role\n"
 printf "     - Change thinking levels (off/minimal/low/medium/high/xhigh/max)\n"
 printf "     - Override prompt paths\n"
@@ -363,11 +351,8 @@ printf "     https://yakov.khalinsky.com/agentic-team-protocol/\n"
 printf "\n"
 
 printf "${BOLD}Commands:${NC}\n"
-printf "  /team                  Live dashboard\n"
-printf "  /team-steer <id> <msg> Message a worker\n"
-printf "  /team-stop <id|all>    Stop workers\n"
-printf "  /team-result <id>      Get worker's final answer\n"
-printf "  /team-enable on|off    Toggle team/solo mode\n"
+printf "  /agents                List discovered team agents\n"
+printf "  /stop-worker <id>      Abort a running worker\n"
 printf "\n"
 
 printf "${BOLD}Anti-patterns the paper names:${NC}\n"

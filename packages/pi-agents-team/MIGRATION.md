@@ -8,7 +8,7 @@ Path A is a major simplification of `pi-agents-team`. It removes the heavy orche
 - **Configuration moves from `agents-team.json` to `.pi/agents/*.md`.** Each role becomes a single Markdown file with YAML frontmatter plus a prompt body.
 - **Slash commands are reduced to `/agents`.** Use `/agents` to list discovered profiles.
 - **Delegation is handled by built-in tools.** The extension registers `delegate_task` and `wait_for_agents`; the old `agent_status`, `agent_result`, `agent_message`, `ping_agents`, and `agent_cancel` tools are removed.
-- **Eden-memory ATP integration is preserved (optional).** When `EDEN_MEMORY_ENABLED=true` and the required env fields are configured, the thin extension records ATP lifecycle markers and runs a startup blocked/unfinished-goals check. It no longer writes a project `.env` or shows a dashboard, but it still surfaces results via `pi.appendEntry` and the orchestrator prompt.
+- **Eden-memory is a required primitive.** The team either loads fully (when `eden-memory` is healthy) or doesn't load (when the binary is unreachable). When it doesn't load, the orchestrator sees a normal pi session with no team tools, no team widget, no system-prompt block, a footer status reading `Team unavailable — eden-memory unreachable`, and a `ctx.ui.notify` fired with the same message. There is no `EDEN_MEMORY_ENABLED` env var; the var is silently ignored if set. To remove the team entirely, uninstall the extension.
 - **Plain-JS compatibility is preserved.** The source is emitted JavaScript in `.ts` files; the runtime does not depend on TypeScript.
 
 ## Breaking changes

@@ -4,12 +4,11 @@ Pi Agents Team can append Agent Team Protocol (ATP) lifecycle markers to a local
 
 The marker grammar in this document mirrors the canonical table in `atp-markers.ts` (the runtime source of truth) and `.pi-team/reference/markers.md`. When the runtime table and the docs disagree, the runtime table wins and this doc is wrong.
 
-## Enabling the integration
+## Configuration
 
-The eden-memory ATP integration is **controlled by environment variables** so it remains optional in the Path A thin extension. Set `EDEN_MEMORY_ENABLED=true` (or leave it unset, in which case it defaults to enabled) and configure the required base fields listed below. When `EDEN_MEMORY_ENABLED=false` or the required fields are missing, the extension behaves exactly as before: no memory writes are attempted and no startup checks are run.
+Eden-memory is a required primitive. The extension does not provide an opt-out. When the binary is reachable, the team loads fully. When it is not, the team falls back to a normal pi session (no team tools, no team widget, no orchestrator system-prompt block), the footer status reads `Team unavailable — eden-memory unreachable`, and a `ctx.ui.notify` is fired.
 
 ```bash
-export EDEN_MEMORY_ENABLED=true
 export EDEN_MEMORY_BIN=/home/yakov/.local/bin/eden-memory
 export EDEN_MEMORY_DB=/home/eden-memory/default.db
 export EDEN_WORKSPACE_ID=default
@@ -38,7 +37,6 @@ export EDEN_LLM_BASE_URL=https://api.openai.com/v1
 
 | Variable | Purpose |
 |---|---|
-| `EDEN_MEMORY_ENABLED` | `true`/`false` toggle. Defaults to enabled. |
 | `EDEN_MEMORY_SEMANTIC_SEARCH` | `true` to enable semantic document generation. |
 | `EDEN_LLM_API_KEY` | Required when semantic search is enabled. |
 | `EDEN_LLM_BASE_URL` | Required when semantic search is enabled. |

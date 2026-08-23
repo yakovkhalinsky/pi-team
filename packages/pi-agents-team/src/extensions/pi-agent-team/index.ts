@@ -311,7 +311,7 @@ export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoa
   const errored = workerList.filter((w) => w.status === "error" || w.status === "aborted").length;
 
   let memory = null;
-  if (memoryTracker?.status?.enabled) {
+  if (memoryTracker) {
     const byMarker = memoryTracker.status.byMarker ?? {};
     // Production trackers (createMemoryStatusTracker / aggregateEdenMemoryStatus)
     // store per-marker buckets as { ok, error, skipped } objects, not numbers.
@@ -485,12 +485,9 @@ export function buildWidgetLines(snapshot, now = Date.now()) {
       }
     }
     lines.push("");
-  } else {
-    lines.push("Memory: disabled (EDEN_MEMORY_ENABLED not set)");
-    lines.push("");
   }
 
-  lines.push("Use /team to toggle this panel. /agents for details.");
+  lines.push("Use /agents for details.");
 
   return lines.slice(0, 40);
 }
@@ -549,6 +546,15 @@ function scanRelayQuestion(text) {
 }
 
 const workers = new Map();
+
+// teamLoaded is true when the team is fully loaded (eden-memory healthy
+// and tools/commands registered). When false, the orchestrator sees a
+// normal pi session. Set on session_start after the health check, reset
+// on session_shutdown and at the top of session_start as a fallback
+// default. Module-scope (mirrors `workers`) so tests can flip it via
+// `_testing.setTeamLoaded` for tool-only tests that don't go through
+// session_start.
+let teamLoaded = false;
 
 function generateWorkerId() {
   return `worker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -624,6 +630,12 @@ export const _testing = {
   buildStatusLine,
   buildWidgetLines,
   formatDuration,
+  // Tests that exercise the tool/command bodies directly (without going
+  // through session_start) need to flip teamLoaded to true. Production code
+  // sets it inside the session_start health gate.
+  setTeamLoaded: (value) => {
+    teamLoaded = Boolean(value);
+  },
 };
 
 export default function (pi, options = {}) {
@@ -657,7 +669,6 @@ export default function (pi, options = {}) {
   // Team-status UI state. Per-session so /new, /resume, /fork get a clean
   // panel and footer. The workers map is module-scoped, but we clear it on
   // session_start so per-session freshness is real.
-  let widgetVisible = false;
   let lastUiCtx = null;
 
   function clearUi() {
@@ -673,7 +684,7 @@ export default function (pi, options = {}) {
   }
 
   function refreshUi(ctx) {
-    // Stash the ctx so /team and /agents can re-render without needing one.
+    // Stash the ctx so /agents can re-render without needing one.
     if (ctx) lastUiCtx = ctx;
     const uiCtx = lastUiCtx;
     if (!uiCtx?.ui) return;
@@ -688,20 +699,26 @@ export default function (pi, options = {}) {
       // Discovery failed (e.g. permission error). Render a minimal status.
       const fallback = "Team (unavailable)";
       if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, fallback);
-      if (widgetVisible && typeof ui.setWidget === "function") {
+      if (teamLoaded && typeof ui.setWidget === "function") {
         ui.setWidget(TEAM_WIDGET_KEY, [fallback, String(err?.message ?? err)]);
       }
+      return;
+    }
+
+    // When the team is not loaded, render a one-line unavailable status and
+    // clear the widget. When it is loaded, render the normal status line and
+    // the widget panel.
+    if (!teamLoaded) {
+      const unavailable = "Team unavailable \u2014 eden-memory unreachable";
+      if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, unavailable);
+      if (typeof ui.setWidget === "function") ui.setWidget(TEAM_WIDGET_KEY, undefined);
       return;
     }
 
     const statusLine = buildStatusLine(snapshot);
     if (typeof ui.setStatus === "function") ui.setStatus(TEAM_STATUS_KEY, statusLine);
     if (typeof ui.setWidget === "function") {
-      if (widgetVisible) {
-        ui.setWidget(TEAM_WIDGET_KEY, buildWidgetLines(snapshot), { placement: "belowEditor" });
-      } else {
-        ui.setWidget(TEAM_WIDGET_KEY, undefined);
-      }
+      ui.setWidget(TEAM_WIDGET_KEY, buildWidgetLines(snapshot), { placement: "belowEditor" });
     }
   }
 
@@ -712,17 +729,17 @@ export default function (pi, options = {}) {
   function buildMemoryPayload() {
     const workerStatuses = Array.from(workers.values())
       .map((w) => w.edenMemoryStatus)
-      .filter((s) => s && s.enabled);
+      .filter((s) => Boolean(s));
     return aggregateEdenMemoryStatus(memoryTracker?.status, workerStatuses);
   }
 
   function attachWorkerMemoryStatus(record) {
-    if (!memoryTracker?.status?.enabled) return;
-    record.edenMemoryStatus = createWorkerEdenMemoryStatus(true);
+    if (!memoryTracker) return;
+    record.edenMemoryStatus = createWorkerEdenMemoryStatus();
   }
 
   function recordWorkerCompletion(workerId, params, status) {
-    if (!memoryTracker?.status?.enabled) return;
+    if (!memoryTracker) return;
     const edenOptions = resolveEdenOptions(process.env);
     void recordRecordingAndArchival(
       `worker ${workerId} finished with status ${status}`,
@@ -756,6 +773,7 @@ export default function (pi, options = {}) {
     // is the right boundary.)
     workers.clear();
     lastBlockedGoals = [];
+    teamLoaded = false;
     if (memoryTracker && typeof memoryTracker.stopPolling === "function") {
       try {
         memoryTracker.stopPolling();
@@ -764,7 +782,6 @@ export default function (pi, options = {}) {
       }
     }
     memoryTracker = null;
-    widgetVisible = false;
     lastUiCtx = ctx;
     const agents = discoverAgents(ctx.cwd ?? process.cwd());
     if (agents.length > 0 && ctx?.hasUI) {
@@ -774,64 +791,93 @@ export default function (pi, options = {}) {
     // even before any tool runs.
     refreshUi(ctx);
 
+    // eden-memory is required. The team always runs the tracker; if health
+    // fails, session_start falls back to a normal pi session. We log a
+    // fatal entry, set a one-line footer status, fire a notification, and
+    // leave teamLoaded = false. Tools and commands remain registered but
+    // early-return when called, so the orchestrator sees no team contract.
     const edenOptions = resolveEdenOptions(process.env);
-    if (edenOptions.enabled === true) {
-      memoryTracker = createMemoryStatusTracker({
-        enabled: true,
-        health,
-        edenOptions,
-        healthIntervalMs: 60_000,
-        healthTimeoutMs: 15_000,
-      });
-      memoryTracker.startPolling();
+    memoryTracker = createMemoryStatusTracker({
+      health,
+      edenOptions,
+      healthIntervalMs: 60_000,
+      healthTimeoutMs: 15_000,
+    });
+    memoryTracker.startPolling();
 
-      const startupSignal = AbortSignal.timeout(15_000);
-      blockedGoalsReady = (async () => {
-        try {
-          const healthResult = await health(edenOptions, startupSignal);
-          memoryTracker.updateFromHealthResult(healthResult);
-          if (!healthResult.ok) {
-            logMemoryWarning(`Eden-memory health check failed: ${healthResult.error}`);
-            return;
-          }
-
-          const receiptResult = await recordGoalReceipt(
-            `session_start ${new Date().toISOString()}`,
-            { edenOptions, edenMemoryStatus: memoryTracker.status, signal: startupSignal },
-            { packageName: "pi-agents-team" },
-          );
-          memoryTracker.updateFromWriteResult(receiptResult);
-
-          const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions, startupSignal);
-          if (blockedResult.ok) {
-            lastBlockedGoals = blockedResult.goals;
-            if (lastBlockedGoals.length > 0) {
-              try {
-                pi.appendEntry(MEMORY_BLOCKED_GOALS_TYPE, {
-                  type: MEMORY_BLOCKED_GOALS_TYPE,
-                  count: lastBlockedGoals.length,
-                  goals: lastBlockedGoals.slice(0, 10).map((g) => ({ goalId: g.goalId, reason: g.reason })),
-                });
-              } catch {
-                // Best-effort entry.
-              }
-            }
-          } else {
-            logMemoryWarning(`Eden-memory blocked-goals query failed: ${blockedResult.error}`);
-          }
-        } catch (err) {
-          logMemoryWarning(`Eden-memory startup check error: ${err?.message ?? String(err)}`);
-        }
-      })();
-    } else {
-      blockedGoalsReady = Promise.resolve();
+    const startupSignal = AbortSignal.timeout(15_000);
+    let startupHealthResult;
+    try {
+      startupHealthResult = await health(edenOptions, startupSignal);
+    } catch (err) {
+      startupHealthResult = { ok: false, error: err?.message ?? String(err) };
     }
+    memoryTracker.updateFromHealthResult(startupHealthResult);
+
+    if (!startupHealthResult.ok) {
+      // Graceful fallback — the orchestrator sees a normal pi session.
+      try {
+        pi.appendEntry(MEMORY_STATUS_TYPE, {
+          type: MEMORY_STATUS_TYPE,
+          level: "fatal",
+          message: `Team unavailable: eden-memory unreachable at ${edenOptions.bin}: ${startupHealthResult.error ?? "unknown error"}`,
+        });
+      } catch {
+        // Best-effort entry.
+      }
+      logMemoryWarning(`Eden-memory health check failed: ${startupHealthResult.error ?? "unknown error"}`);
+      blockedGoalsReady = Promise.resolve();
+      // teamLoaded stays false; refresh the UI so the footer shows the
+      // unavailability message and the widget stays empty.
+      refreshUi(ctx);
+      ctx?.ui?.notify?.(
+        `Team unavailable — eden-memory unreachable at ${edenOptions.bin}. Run install or fix the path.`,
+        "error",
+      );
+      return;
+    }
+
+    // Health OK — load the team fully.
+    teamLoaded = true;
+    refreshUi(ctx);
+
+    blockedGoalsReady = (async () => {
+      try {
+        const receiptResult = await recordGoalReceipt(
+          `session_start ${new Date().toISOString()}`,
+          { edenOptions, edenMemoryStatus: memoryTracker.status, signal: startupSignal },
+          { packageName: "pi-agents-team" },
+        );
+        memoryTracker.updateFromWriteResult(receiptResult);
+
+        const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions, startupSignal);
+        if (blockedResult.ok) {
+          lastBlockedGoals = blockedResult.goals;
+          if (lastBlockedGoals.length > 0) {
+            try {
+              pi.appendEntry(MEMORY_BLOCKED_GOALS_TYPE, {
+                type: MEMORY_BLOCKED_GOALS_TYPE,
+                count: lastBlockedGoals.length,
+                goals: lastBlockedGoals.slice(0, 10).map((g) => ({ goalId: g.goalId, reason: g.reason })),
+              });
+            } catch {
+              // Best-effort entry.
+            }
+          }
+        } else {
+          logMemoryWarning(`Eden-memory blocked-goals query failed: ${blockedResult.error}`);
+        }
+      } catch (err) {
+        logMemoryWarning(`Eden-memory startup check error: ${err?.message ?? String(err)}`);
+      }
+    })();
   });
 
   pi.on("session_shutdown", async (_event, _ctx) => {
     // Clear the team-status UI surfaces. Worker map is cleared at the next
     // session_start.
     clearUi();
+    teamLoaded = false;
     if (memoryTracker && typeof memoryTracker.stopPolling === "function") {
       try {
         memoryTracker.stopPolling();
@@ -839,7 +885,7 @@ export default function (pi, options = {}) {
         // Best-effort.
       }
     }
-    if (!memoryTracker?.status?.enabled) return;
+    if (!memoryTracker) return;
     // Wait for any in-flight startup work so we don't race the closure write.
     // Capped so a hung eden-memory CLI never blocks session shutdown.
     try {
@@ -859,6 +905,7 @@ export default function (pi, options = {}) {
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
+    if (!teamLoaded) return undefined;
     const cwd = ctx.cwd ?? process.cwd();
     if (!hasProjectAgents(cwd)) return undefined;
 
@@ -921,6 +968,12 @@ export default function (pi, options = {}) {
     description: "Spawn a worker Pi process for a team agent and return its final answer.",
     parameters: DelegateTaskSchema,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!teamLoaded) {
+        return {
+          content: [{ type: "text", text: "Team unavailable — eden-memory unreachable. The delegate_task tool is not registered when the team falls back." }],
+          isError: true,
+        };
+      }
       const workerId = generateWorkerId();
       const cwd = params.cwd ?? ctx?.cwd ?? process.cwd();
       const agents = discoverAgents(cwd);
@@ -940,7 +993,7 @@ export default function (pi, options = {}) {
       attachWorkerMemoryStatus(record);
       onWorkerStateChanged(ctx);
 
-      if (memoryTracker?.status?.enabled) {
+      if (memoryTracker) {
         const edenOptions = resolveEdenOptions(process.env);
         void recordRouting(
           `delegated "${params.title}" to ${params.profileName}`,
@@ -1066,6 +1119,12 @@ export default function (pi, options = {}) {
     description: "Wait for delegated workers to finish and return their statuses.",
     parameters: WaitForAgentsSchema,
     async execute(_toolCallId, params) {
+      if (!teamLoaded) {
+        return {
+          content: [{ type: "text", text: "Team unavailable — eden-memory unreachable." }],
+          isError: true,
+        };
+      }
       const ids = params.workerIds ?? Array.from(workers.keys());
       const timeoutMs = params.timeoutMs ?? 300_000;
       const wakeOnRelay = params.wakeOnRelay ?? true;
@@ -1151,6 +1210,11 @@ export default function (pi, options = {}) {
     description: "Terminate a running delegated worker by worker id.",
     parameters: AbortWorkerSchema,
     async execute(_toolCallId, params) {
+      if (!teamLoaded) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ success: false, error: "Team unavailable — eden-memory unreachable." }) }],
+        };
+      }
       const record = workers.get(params.workerId);
       if (!record) {
         return {
@@ -1206,6 +1270,10 @@ export default function (pi, options = {}) {
   pi.registerCommand("stop-worker", {
     description: "Terminate a running delegated worker: /stop-worker \u003cworkerId\u003e",
     handler: async (args, ctx) => {
+      if (!teamLoaded) {
+        sendAgentOutput(pi, ctx, "Team unavailable \u2014 eden-memory unreachable.");
+        return;
+      }
       const workerId = typeof args === "string" ? args.trim() : "";
       const record = workers.get(workerId);
       if (!record) {
@@ -1231,27 +1299,6 @@ export default function (pi, options = {}) {
         `Worker ${workerId} aborted (${killed ? "kill sent" : "no running controller"}).`,
       );
       refreshUi(ctx);
-    },
-  });
-
-  pi.registerCommand("team", {
-    description: "Toggle the team-status panel below the editor: /team [on|off]",
-    handler: async (args, ctx) => {
-      const arg = typeof args === "string" ? args.trim().toLowerCase() : "";
-      if (arg === "on") widgetVisible = true;
-      else if (arg === "off") widgetVisible = false;
-      else widgetVisible = !widgetVisible;
-
-      if (widgetVisible) {
-        refreshUi(ctx);
-        ctx?.ui?.notify?.("Team panel shown. /team to hide.", "info");
-      } else {
-        // Render once more to clear the widget, but keep the footer status.
-        if (ctx?.ui && typeof ctx.ui.setWidget === "function") {
-          ctx.ui.setWidget(TEAM_WIDGET_KEY, undefined);
-        }
-        ctx?.ui?.notify?.("Team panel hidden. /team to show.", "info");
-      }
     },
   });
 
