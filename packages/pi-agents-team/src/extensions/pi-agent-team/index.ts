@@ -17,11 +17,15 @@ import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/
 import { extractFinalAnswer, parseFinalAnswerSummaryFields } from "../../runtime/final-answer.js";
 import { cleanupTempPrompt, spawnWorker, writeTempPrompt } from "../../runtime/worker-spawn.js";
 import {
+  aggregateEdenMemoryStatus,
   createMemoryStatusTracker,
+  createWorkerEdenMemoryStatus,
   findBlockedOrUnfinishedGoals,
   formatBlockedGoalsSummary,
   health,
+  recordClosure,
   recordGoalReceipt,
+  recordHandOff,
   recordRecordingAndArchival,
   recordRouting,
   resolveEdenOptions,
@@ -322,7 +326,6 @@ function createWorkerRecord(workerId, profileName, title) {
   workers.set(workerId, record);
   return record;
 }
-
 function settleWorker(workerId, update) {
   const record = workers.get(workerId);
   if (!record) return;
@@ -345,9 +348,10 @@ function buildWorkerTaskText(params) {
   return `${instruction}\n\n${body}`;
 }
 
-function makeDelegateResult(workerId, status, result, error) {
+function makeDelegateResult(workerId, status, result, error, memory) {
   const payload = { workerId, status, result: result ?? {} };
   if (error) payload.error = error;
+  if (memory) payload.memory = memory;
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
   };
@@ -376,6 +380,7 @@ export const _testing = {
 export default function (pi, options = {}) {
   let memoryTracker = null;
   let lastBlockedGoals = [];
+  let blockedGoalsReady = Promise.resolve();
 
   function recordState() {
     try {
@@ -398,6 +403,22 @@ export default function (pi, options = {}) {
     } catch {
       // Best-effort logging.
     }
+  }
+
+  /**
+   * Build the aggregated memory block for tool payloads. Always returns
+   * undefined when memory is disabled, so callers can omit the key entirely.
+   */
+  function buildMemoryPayload() {
+    const workerStatuses = Array.from(workers.values())
+      .map((w) => w.edenMemoryStatus)
+      .filter((s) => s && s.enabled);
+    return aggregateEdenMemoryStatus(memoryTracker?.status, workerStatuses);
+  }
+
+  function attachWorkerMemoryStatus(record) {
+    if (!memoryTracker?.status?.enabled) return;
+    record.edenMemoryStatus = createWorkerEdenMemoryStatus(true);
   }
 
   function recordWorkerCompletion(workerId, params, status) {
@@ -436,7 +457,7 @@ export default function (pi, options = {}) {
       memoryTracker.startPolling();
 
       const startupSignal = AbortSignal.timeout(15_000);
-      void (async () => {
+      blockedGoalsReady = (async () => {
         try {
           const healthResult = await health(edenOptions, startupSignal);
           memoryTracker.updateFromHealthResult(healthResult);
@@ -473,7 +494,25 @@ export default function (pi, options = {}) {
           logMemoryWarning(`Eden-memory startup check error: ${err?.message ?? String(err)}`);
         }
       })();
+    } else {
+      blockedGoalsReady = Promise.resolve();
     }
+  });
+
+  pi.on("session_shutdown", async (_event, _ctx) => {
+    if (!memoryTracker?.status?.enabled) return;
+    // Wait for any in-flight startup work so we don't race the closure write.
+    try {
+      await blockedGoalsReady;
+    } catch {
+      // Best-effort.
+    }
+    const edenOptions = resolveEdenOptions(process.env);
+    await recordClosure(
+      "session-shutdown",
+      { edenOptions, edenMemoryStatus: memoryTracker.status },
+      { packageName: "pi-agents-team" },
+    ).catch(() => {});
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
@@ -482,6 +521,18 @@ export default function (pi, options = {}) {
 
     const agents = discoverAgents(cwd);
     if (agents.length === 0) return undefined;
+
+    // Wait for the session-start blocked-goals lookup to settle before we
+    // decide whether to inject the summary. Capped so a hung CLI never blocks
+    // the agent.
+    try {
+      await Promise.race([
+        blockedGoalsReady,
+        new Promise((resolve) => setTimeout(resolve, 2_000)),
+      ]);
+    } catch {
+      // Best-effort.
+    }
 
     const block = buildAgentPromptBlock(agents);
     const blockedSummary = formatBlockedGoalsSummary(lastBlockedGoals);
@@ -510,12 +561,14 @@ export default function (pi, options = {}) {
       if (!agent) {
         const available = agents.map((a) => a.name).join(", ") || "none";
         const error = `Unknown agent profile: "${params.profileName}". Available: ${available}.`;
-        createWorkerRecord(workerId, params.profileName, params.title);
+        const errorRecord = createWorkerRecord(workerId, params.profileName, params.title);
+        attachWorkerMemoryStatus(errorRecord);
         settleWorker(workerId, { status: "error", error });
-        return makeDelegateResult(workerId, "error", {}, error);
+        return makeDelegateResult(workerId, "error", {}, error, buildMemoryPayload());
       }
 
       const record = createWorkerRecord(workerId, params.profileName, params.title);
+      attachWorkerMemoryStatus(record);
 
       if (memoryTracker?.status?.enabled) {
         const edenOptions = resolveEdenOptions(process.env);
@@ -595,7 +648,7 @@ export default function (pi, options = {}) {
             exitCode: result.exitCode ?? null,
           });
           recordWorkerCompletion(workerId, params, "error");
-          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
+          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error, buildMemoryPayload());
         }
 
         if (!finalAnswerText) {
@@ -608,7 +661,7 @@ export default function (pi, options = {}) {
             exitCode: result.exitCode ?? null,
           });
           recordWorkerCompletion(workerId, params, "error");
-          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error);
+          return makeDelegateResult(workerId, "error", { ...summary, finalAnswer: finalAnswerText }, error, buildMemoryPayload());
         }
 
         const workerResult = { ...summary, finalAnswer: finalAnswerText };
@@ -621,12 +674,12 @@ export default function (pi, options = {}) {
           exitCode: result.exitCode ?? 0,
         });
         recordWorkerCompletion(workerId, params, "completed");
-        return makeDelegateResult(workerId, "completed", workerResult);
+        return makeDelegateResult(workerId, "completed", workerResult, undefined, buildMemoryPayload());
       } catch (err) {
         const error = err?.message ?? String(err);
         settleWorker(workerId, { status: "error", error });
         recordWorkerCompletion(workerId, params, "error");
-        return makeDelegateResult(workerId, "error", {}, error);
+        return makeDelegateResult(workerId, "error", {}, error, buildMemoryPayload());
       } finally {
         await cleanupTempPrompt(tmpFilePath, tmpDir);
       }
@@ -657,6 +710,13 @@ export default function (pi, options = {}) {
         return ids.map(snapshotWorker);
       }
 
+      function payload(extra) {
+        const out = { ...extra, workers: snapshotWorkers() };
+        const memory = buildMemoryPayload();
+        if (memory) out.memory = memory;
+        return out;
+      }
+
       while (true) {
         if (wakeOnRelay) {
           const relayQuestions = ids.flatMap((id) => {
@@ -670,11 +730,7 @@ export default function (pi, options = {}) {
               content: [
                 {
                   type: "text",
-                  text: JSON.stringify({
-                    reason: "relay_raised",
-                    workers: snapshotWorkers(),
-                    newRelays,
-                  }),
+                  text: JSON.stringify(payload({ reason: "relay_raised", newRelays })),
                 },
               ],
             };
@@ -690,7 +746,7 @@ export default function (pi, options = {}) {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({ reason: "all_terminal", workers: snapshotWorkers() }),
+                text: JSON.stringify(payload({ reason: "all_terminal" })),
               },
             ],
           };
@@ -701,7 +757,7 @@ export default function (pi, options = {}) {
             content: [
               {
                 type: "text",
-                text: JSON.stringify({ reason: "timeout", workers: snapshotWorkers() }),
+                text: JSON.stringify(payload({ reason: "timeout" })),
               },
             ],
           };

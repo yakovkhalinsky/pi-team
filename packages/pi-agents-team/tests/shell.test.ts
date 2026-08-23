@@ -770,12 +770,18 @@ describe("Path A thin extension shell", () => {
 
     const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
     await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
-    await new Promise((resolve) => setTimeout(resolve, 500));
 
-    const blockedGoalsEntry = pi.entries.find((e) => e.type === "pi-agents-team/memory-blocked-goals");
+    // Poll for the blocked-goals entry with a deadline so this test isn't flaky.
+    const deadline = Date.now() + 5_000;
+    let blockedGoalsEntry = null;
+    while (Date.now() < deadline) {
+      blockedGoalsEntry = pi.entries.find((e) => e.type === "pi-agents-team/memory-blocked-goals") ?? null;
+      if (blockedGoalsEntry) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.ok(blockedGoalsEntry, "should record a blocked-goals entry");
-    assert.equal(blockedGoalsEntry.data.count, 1);
-    assert.equal(blockedGoalsEntry.data.goals[0].goalId, "g1");
+    assert.equal(blockedGoalsEntry!.data.count, 1);
+    assert.equal(blockedGoalsEntry!.data.goals[0].goalId, "g1");
 
     const statusEntries = pi.entries.filter((e) => e.type === "pi-agents-team/memory-status");
     assert.equal(statusEntries.length, 0, "no warnings should be logged when queries succeed");
@@ -810,9 +816,15 @@ describe("Path A thin extension shell", () => {
       undefined,
       createMockContext(),
     );
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const log = readFileSync(fakeEden.log, "utf-8");
+    // Poll the log file with a deadline so this test isn't flaky on slow CI.
+    const deadline = Date.now() + 5_000;
+    let log = "";
+    while (Date.now() < deadline) {
+      log = readFileSync(fakeEden.log, "utf-8");
+      if (log.includes("[recorded]")) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.ok(log.includes('"subcommand":"remember"'), "should record remember markers");
     const rememberLines = log.split("\n").filter((line) => line.includes('"subcommand":"remember"'));
     assert.ok(
@@ -834,7 +846,14 @@ describe("Path A thin extension shell", () => {
 
     const sessionStartHandlers = pi.handlers.get("session_start") ?? [];
     await sessionStartHandlers[0]({ reason: "startup" }, createMockContext());
-    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Wait for the blocked-goals entry to land, then call before_agent_start.
+    // The handler itself awaits the blocked-goals promise with a 2s ceiling.
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (pi.entries.some((e) => e.type === "pi-agents-team/memory-blocked-goals")) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
 
     const handler = pi.handlers.get("before_agent_start")?.[0];
     const result = await handler({ systemPrompt: "You are a helpful coding assistant." }, createMockContext());

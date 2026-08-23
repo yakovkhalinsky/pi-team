@@ -5,9 +5,10 @@ import {
   createMemoryStatusTracker,
   formatEdenMemoryEvent,
   formatMemoryStatusFragment,
-  formatWorkerMemoryLine,
   getMemoryStatusGlyph,
   recordEdenMemoryMarker,
+  ensureWorkerEdenMemoryStatus,
+  createWorkerEdenMemoryStatus,
 } from "../../src/src/memory/memory-status.js";
 
 describe("memory/memory-status", () => {
@@ -18,6 +19,15 @@ describe("memory/memory-status", () => {
       assert.equal(tracker.status.healthy, undefined);
       assert.equal(tracker.status.recordsWritten, 0);
       assert.equal(tracker.status.recordsFailed, 0);
+      assert.equal(tracker.status.recordsSkipped, 0);
+      assert.equal(tracker.status.byMarker, undefined);
+    });
+
+    it("pre-initialises the byMarker histogram when enabled", () => {
+      const tracker = createMemoryStatusTracker({ enabled: true });
+      assert.ok(tracker.status.byMarker);
+      assert.ok(tracker.status.byMarker?.["[action]"]);
+      assert.equal(tracker.status.byMarker?.["[action]"]?.ok, 0);
     });
 
     it("increments recordsWritten on successful writes", () => {
@@ -91,16 +101,21 @@ describe("memory/memory-status", () => {
   });
 
   describe("per-worker ATP lifecycle tracking", () => {
-    it("records marker results into event history", () => {
+    it("records marker results into event history and the byMarker histogram", () => {
       const status = createMemoryStatusTracker({ enabled: true }).status;
       recordEdenMemoryMarker(status, { markerName: "[action]", ok: true, memoryId: "m1", goalId: "g1", taskId: "t1" });
       recordEdenMemoryMarker(status, { markerName: "[recorded]", ok: true, memoryId: "m2", goalId: "g1", taskId: "t1" });
-      assert.equal(status.recordCount, 2);
+      assert.equal(status.recordsWritten, 2);
+      assert.equal(status.recordsFailed, 0);
+      assert.equal(status.recordsSkipped, 0);
       assert.equal(status.lastMarkerName, "[recorded]");
       assert.equal(status.lastResult, "ok");
       assert.equal(status.eventHistory?.length, 2);
       assert.deepEqual(status.goalMemoryIds, ["m1", "m2"]);
       assert.deepEqual(status.taskMemoryIds, ["m1", "m2"]);
+      assert.equal(status.byMarker?.["[action]"]?.ok, 1);
+      assert.equal(status.byMarker?.["[recorded]"]?.ok, 1);
+      assert.equal(status.byMarker?.["[verdict]"]?.ok, 0);
     });
 
     it("tracks last error and result for failed markers", () => {
@@ -109,21 +124,30 @@ describe("memory/memory-status", () => {
       assert.equal(status.lastResult, "error");
       assert.equal(status.lastError, "write failed");
       assert.equal(status.eventHistory?.[0]?.ok, false);
+      assert.equal(status.byMarker?.["[action]"]?.error, 1);
+    });
+
+    it("counts skipped writes distinctly from failed writes", () => {
+      const status = createMemoryStatusTracker({ enabled: true }).status;
+      recordEdenMemoryMarker(status, { markerName: "[action]", ok: false, skipped: true, error: "missing env" });
+      assert.equal(status.recordsSkipped, 1);
+      assert.equal(status.recordsFailed, 0);
+      assert.equal(status.lastResult, "skipped");
+      assert.equal(status.byMarker?.["[action]"]?.skipped, 1);
     });
 
     it("caps event history at MAX_EVENT_HISTORY", () => {
       const status = createMemoryStatusTracker({ enabled: true }).status;
       for (let i = 0; i < 10; i += 1) {
-        recordEdenMemoryMarker(status, { markerName: `[m${i}]`, ok: true });
+        recordEdenMemoryMarker(status, { markerName: "[action]", ok: true });
       }
       assert.equal(status.eventHistory?.length, 8);
-      assert.equal(status.eventHistory?.[0]?.markerName, "[m2]");
     });
 
     it("ignores disabled or undefined status", () => {
-      assert.doesNotThrow(() => recordEdenMemoryMarker(undefined, { markerName: "[x]", ok: true }));
+      assert.doesNotThrow(() => recordEdenMemoryMarker(undefined, { markerName: "[action]", ok: true }));
       const disabled = createMemoryStatusTracker({ enabled: false }).status;
-      assert.doesNotThrow(() => recordEdenMemoryMarker(disabled, { markerName: "[x]", ok: true }));
+      assert.doesNotThrow(() => recordEdenMemoryMarker(disabled, { markerName: "[action]", ok: true }));
       assert.equal(disabled.eventHistory, undefined);
     });
 
@@ -131,21 +155,6 @@ describe("memory/memory-status", () => {
       const line = formatEdenMemoryEvent({ markerName: "[action]", ok: true, ts: 0 });
       assert.ok(line.includes("[action]"));
       assert.ok(line.includes("✓"));
-    });
-
-    it("formats a worker memory line for tool output", () => {
-      const status = createMemoryStatusTracker({ enabled: true }).status;
-      recordEdenMemoryMarker(status, { markerName: "[action]", ok: true, memoryId: "m1" });
-      const line = formatWorkerMemoryLine(status);
-      assert.ok(line);
-      assert.ok(line?.includes("Memory"));
-      assert.ok(line?.includes("[action]"));
-      assert.ok(line?.includes("records=1"));
-    });
-
-    it("returns undefined memory line when disabled", () => {
-      assert.equal(formatWorkerMemoryLine(undefined), undefined);
-      assert.equal(formatWorkerMemoryLine(createMemoryStatusTracker({ enabled: false }).status), undefined);
     });
   });
 
@@ -155,10 +164,12 @@ describe("memory/memory-status", () => {
       assert.equal(getMemoryStatusGlyph({ enabled: false } as any), "");
     });
 
-    it("chooses glyphs by severity", () => {
+    it("chooses glyphs by severity (locked beats error, error beats warning, skipped beats ok)", () => {
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: true } as any), "✓");
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: false } as any), "✗");
+      assert.equal(getMemoryStatusGlyph({ enabled: true, lastResult: "error" } as any), "✗");
       assert.equal(getMemoryStatusGlyph({ enabled: true, healthy: true, lastError: "x" } as any), "⚠");
+      assert.equal(getMemoryStatusGlyph({ enabled: true, lastResult: "skipped" } as any), "–");
       assert.equal(getMemoryStatusGlyph({ enabled: true, locked: true } as any), "🔒");
     });
 
@@ -172,32 +183,83 @@ describe("memory/memory-status", () => {
       const fragment = formatMemoryStatusFragment({ enabled: true, healthy: true, recordsFailed: 2 } as any);
       assert.ok(fragment.includes("2 failed"));
     });
+
+    it("surfaces skipped writes distinctly from failures", () => {
+      const fragment = formatMemoryStatusFragment({
+        enabled: true,
+        healthy: true,
+        recordsFailed: 0,
+        recordsSkipped: 3,
+        lastResult: "skipped",
+      } as any);
+      assert.ok(fragment.includes("3 skipped"));
+    });
   });
 
   describe("aggregateEdenMemoryStatus", () => {
     it("returns undefined when no statuses are enabled", () => {
       assert.equal(aggregateEdenMemoryStatus(undefined, []), undefined);
-      assert.equal(aggregateEdenMemoryStatus({ enabled: false } as any, [{ edenMemoryStatus: { enabled: false } as any }]), undefined);
+      assert.equal(
+        aggregateEdenMemoryStatus({ enabled: false } as any, [{ edenMemoryStatus: { enabled: false } as any }]),
+        undefined,
+      );
     });
 
-    it("sums counters across team and worker statuses", () => {
-      const team = { enabled: true, recordsWritten: 2, recordsFailed: 0, recordsSkipped: 1, recordCount: 3 } as any;
-      const workers = [
-        { edenMemoryStatus: { enabled: true, recordsWritten: 5, recordsFailed: 1, recordsSkipped: 0, recordCount: 6 } as any },
-        { edenMemoryStatus: { enabled: true, recordsWritten: 0, recordsFailed: 2, recordsSkipped: 0, recordCount: 2 } as any },
-      ];
-      const agg = aggregateEdenMemoryStatus(team, workers);
+    it("sums per-marker counters across team and worker statuses", () => {
+      const team = createMemoryStatusTracker({ enabled: true }).status;
+      recordEdenMemoryMarker(team, { markerName: "[goal-received]", ok: true });
+      recordEdenMemoryMarker(team, { markerName: "[routing]", ok: true });
+      recordEdenMemoryMarker(team, { markerName: "[routing]", skipped: true, ok: false });
+
+      const w1 = createMemoryStatusTracker({ enabled: true }).status;
+      recordEdenMemoryMarker(w1, { markerName: "[action]", ok: true });
+      recordEdenMemoryMarker(w1, { markerName: "[verdict]", ok: false, error: "x" });
+
+      const w2 = createMemoryStatusTracker({ enabled: true }).status;
+      recordEdenMemoryMarker(w2, { markerName: "[action]", ok: true });
+      recordEdenMemoryMarker(w2, { markerName: "[action]", ok: true });
+
+      const agg = aggregateEdenMemoryStatus(team, [{ edenMemoryStatus: w1 }, { edenMemoryStatus: w2 }]);
       assert.ok(agg);
-      assert.equal(agg?.recordsWritten, 7);
-      assert.equal(agg?.recordsFailed, 3);
+      // team: [goal-received] ok=1, [routing] ok=1, [routing] skipped=1
+      // w1:   [action] ok=1, [verdict] error=1
+      // w2:   [action] ok=1, [action] ok=1
+      assert.equal(agg?.recordsWritten, 5);
+      assert.equal(agg?.recordsFailed, 1);
       assert.equal(agg?.recordsSkipped, 1);
-      assert.equal(agg?.recordCount, 11);
+      assert.equal(agg?.byMarker?.["[action]"]?.ok, 3);
+      assert.equal(agg?.byMarker?.["[verdict]"]?.error, 1);
+      assert.equal(agg?.byMarker?.["[routing]"]?.skipped, 1);
+      assert.equal(agg?.totals.ok, 5);
+      assert.equal(agg?.totals.error, 1);
+      assert.equal(agg?.totals.skipped, 1);
     });
 
     it("reports locked if any status is locked", () => {
       const workers = [{ edenMemoryStatus: { enabled: true, locked: true } as any }];
       const agg = aggregateEdenMemoryStatus(undefined, workers);
       assert.equal(agg?.locked, true);
+    });
+  });
+
+  describe("createWorkerEdenMemoryStatus / ensureWorkerEdenMemoryStatus", () => {
+    it("creates a per-worker status with the byMarker histogram pre-initialised", () => {
+      const status = createWorkerEdenMemoryStatus(true);
+      assert.equal(status.enabled, true);
+      assert.ok(status.byMarker);
+      assert.ok(status.byMarker?.["[worker-relay]"]);
+    });
+
+    it("ensureWorkerEdenMemoryStatus attaches the status when enabled and config is on", () => {
+      const worker: { edenMemoryStatus?: any } = {};
+      ensureWorkerEdenMemoryStatus(worker, { memory: { edenMemory: { enabled: true } } });
+      assert.equal(worker.edenMemoryStatus?.enabled, true);
+    });
+
+    it("ensureWorkerEdenMemoryStatus leaves the worker alone when disabled", () => {
+      const worker: { edenMemoryStatus?: any } = {};
+      ensureWorkerEdenMemoryStatus(worker, { memory: { edenMemory: { enabled: false } } });
+      assert.equal(worker.edenMemoryStatus, undefined);
     });
   });
 });

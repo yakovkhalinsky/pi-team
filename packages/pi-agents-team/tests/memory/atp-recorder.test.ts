@@ -7,10 +7,16 @@ import {
   recordGoalReceipt,
   recordRouting,
   recordContextGathering,
+  recordSkipContextGathering,
   recordAction,
   recordVerification,
   recordRecordingAndArchival,
   recordHandOffOrClosure,
+  recordApiReady,
+  recordHandOff,
+  recordClosure,
+  recordAndon,
+  recordEscalation,
   recordWorkerTerminal,
   recordWorkerRelay,
   recordWorkerPrune,
@@ -77,7 +83,7 @@ describe("ATP recorder", () => {
   });
 
   it("builds marker lines with required fields", () => {
-    const line = _testing.buildMarkerLine("action", "Produced artefact", {
+    const line = _testing.buildMarkerLine("[action]", "Produced artefact", {
       goalId: "g1",
       taskId: "t1",
       workerId: "w1",
@@ -94,7 +100,7 @@ describe("ATP recorder", () => {
   });
 
   it("builds metadata with round and supersession", () => {
-    const meta = _testing.buildMetadata("routing", {
+    const meta = _testing.buildMetadata("[routing]", {
       goalId: "g1",
       taskId: "t1",
       round: 2,
@@ -165,11 +171,12 @@ describe("ATP recorder", () => {
     assert.ok(result.error?.includes("Missing required eden-memory env fields"));
   });
 
-  it("records worker terminal events", async () => {
+  it("records worker terminal events with the literal worker-terminal marker", async () => {
     const env = buildEnv(bin);
     const result = await recordWorkerTerminal("w1", "completed", "Implemented feature", { env }, { taskId: "t1", profileName: "builder" });
     assert.equal(result.ok, true);
-    assert.equal(result.marker, "[recorded]");
+    assert.equal(result.marker, "[worker-terminal]");
+    assert.equal(result.stage, "recording-and-archival");
   });
 
   it("records worker relay events", async () => {
@@ -198,19 +205,83 @@ describe("ATP recorder", () => {
     const researcher = await recordTerminalStageForProfile("researcher", "Findings landed", base);
     assert.equal(researcher.ok, true);
     assert.equal(researcher.stage, "context-gathering");
+    assert.equal(researcher.marker, "[context-gathering]");
     const verifier = await recordTerminalStageForProfile("verifier", "Passed", base);
     assert.equal(verifier.ok, true);
     assert.equal(verifier.stage, "verification");
+    assert.equal(verifier.marker, "[verdict]");
     const archivist = await recordTerminalStageForProfile("archivist", "Archived", base);
     assert.equal(archivist.ok, true);
     assert.equal(archivist.stage, "recording-and-archival");
+    assert.equal(archivist.marker, "[recorded]");
     const builder = await recordTerminalStageForProfile("builder", "Built", base);
     assert.equal(builder.ok, true);
     assert.equal(builder.stage, "action");
+    assert.equal(builder.marker, "[action]");
     const runtime = await recordTerminalStageForProfile("runtime", "Deployed", base);
     assert.equal(runtime.ok, true);
     assert.equal(runtime.stage, "action");
+    assert.equal(runtime.marker, "[action]");
     const dispatcher = await recordTerminalStageForProfile("dispatcher", "Routed", base);
     assert.equal(dispatcher.skipped, true);
+  });
+
+  it("writes [skip-context-gathering] as a first-class marker", async () => {
+    const env = buildEnv(bin);
+    const result = await recordSkipContextGathering("uncertainty was low", { env }, { goalId: "g1" });
+    assert.equal(result.ok, true);
+    assert.equal(result.marker, "[skip-context-gathering]");
+    assert.equal(result.stage, "context-gathering");
+  });
+
+  it("worker-event markers carry their literal name and orchestrator/archivist owner", async () => {
+    const env = buildEnv(bin);
+    const terminal = await recordWorkerTerminal("w1", "completed", "Done", { env }, { taskId: "t1" });
+    assert.equal(terminal.marker, "[worker-terminal]");
+    const meta = _testing.buildMetadata("[worker-terminal]", { workerId: "w1" });
+    assert.equal(meta.owner, "orchestrator");
+    assert.equal(meta.workerEvent, true);
+
+    const relay = await recordWorkerRelay("w1", "Need approval", "Assume yes", { env }, { taskId: "t1" });
+    assert.equal(relay.marker, "[worker-relay]");
+    const relayMeta = _testing.buildMetadata("[worker-relay]", { workerId: "w1" });
+    assert.equal(relayMeta.owner, "orchestrator");
+
+    const prune = await recordWorkerPrune(3, { workers: 3 }, { env });
+    assert.equal(prune.marker, "[worker-pruned]");
+    const pruneMeta = _testing.buildMetadata("[worker-pruned]", {});
+    assert.equal(pruneMeta.owner, "archivist");
+  });
+
+  it("writes [api-ready], [handoff], [closure], [andon], [escalation] first-class markers", async () => {
+    const env = buildEnv(bin);
+    const api = await recordApiReady("public contract emitted", { env }, { goalId: "g1" });
+    assert.equal(api.ok, true);
+    assert.equal(api.marker, "[api-ready]");
+
+    const handoff = await recordHandOff("transferred to verifier", { env }, { goalId: "g1" });
+    assert.equal(handoff.ok, true);
+    assert.equal(handoff.marker, "[handoff]");
+
+    const closure = await recordClosure("goal complete", { env }, { goalId: "g1" });
+    assert.equal(closure.ok, true);
+    assert.equal(closure.marker, "[closure]");
+
+    const andon = await recordAndon("deployment failed", "exit code 2", { env }, { goalId: "g1" });
+    assert.equal(andon.ok, true);
+    assert.equal(andon.marker, "[andon]");
+
+    const esc = await recordEscalation(
+      {
+        question: "deploy to prod?",
+        context: "all checks passed",
+        options: ["yes", "no"],
+        defaultIfSilent: "no",
+      },
+      { env },
+      { goalId: "g1" },
+    );
+    assert.equal(esc.ok, true);
+    assert.equal(esc.marker, "[escalation]");
   });
 });
