@@ -336,6 +336,7 @@ export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoa
       lastError: memoryTracker.status.lastError ?? null,
       blockedGoalCount: lastBlockedGoals.length,
       byMarker: histogramEntries,
+      skippedTotal: histogramEntries.reduce((sum, e) => sum + e.skipped, 0),
     };
   }
 
@@ -395,7 +396,16 @@ export function buildStatusLine(snapshot) {
   }
 
   if (memory?.enabled) {
-    parts.push(memory.ok ? "memory: ok" : "memory: degraded");
+    // Healthy is necessary but not sufficient: even a healthy eden-memory
+    // daemon can drop markers on the floor (missing env vars, schema
+    // mismatch, write failure). The skipped counter from the byMarker
+    // histogram is the user-visible signal that the integration is
+    // working end-to-end, so we surface it explicitly when non-zero.
+    if (memory.skippedTotal && memory.skippedTotal > 0) {
+      parts.push(`memory: ${memory.ok ? "ok" : "degraded"} (${memory.skippedTotal} skipped)`);
+    } else {
+      parts.push(memory.ok ? "memory: ok" : "memory: degraded");
+    }
     if (memory.blockedGoalCount > 0) parts.push(`${memory.blockedGoalCount} blocked`);
   }
   return parts.join(" | ");
@@ -468,7 +478,12 @@ export function buildWidgetLines(snapshot, now = Date.now()) {
   }
 
   if (snapshot.memory) {
-    lines.push(`Memory: ${snapshot.memory.ok ? "ok" : "degraded"}`);
+    const memoryHead = snapshot.memory.ok
+      ? snapshot.memory.skippedTotal && snapshot.memory.skippedTotal > 0
+        ? `Memory: ok (${snapshot.memory.skippedTotal} skipped)`
+        : "Memory: ok"
+      : "Memory: degraded";
+    lines.push(memoryHead);
     if (snapshot.memory.lastError) lines.push(`  last error: ${snapshot.memory.lastError}`);
     if (snapshot.memory.blockedGoalCount > 0) {
       lines.push(`  blocked goals: ${snapshot.memory.blockedGoalCount}`);
@@ -481,7 +496,13 @@ export function buildWidgetLines(snapshot, now = Date.now()) {
         if (e.error) breakdown.push(`${e.error} err`);
         if (e.skipped) breakdown.push(`${e.skipped} skip`);
         const detail = breakdown.length > 0 ? ` (${breakdown.join(", ")})` : "";
-        lines.push(`    ${e.marker}: ${e.total}${detail}`);
+        // Per-marker glyph: a skip-only marker means writes are being
+        // dropped on the floor for that marker specifically. The widget
+        // surfaces this with a leading `!` so the user can scan the
+        // byMarker list and find the broken marker at a glance.
+        const skipOnly = e.skipped > 0 && e.ok === 0 && e.error === 0;
+        const glyph = skipOnly ? "!" : " ";
+        lines.push(`  ${glyph} ${e.marker}: ${e.total}${detail}`);
       }
     }
     lines.push("");
@@ -741,6 +762,9 @@ export default function (pi, options = {}) {
   function recordWorkerCompletion(workerId, params, status) {
     if (!memoryTracker) return;
     const edenOptions = resolveEdenOptions(process.env);
+    // Stage 6 (Recording and archival) is owned by the archivist. The
+    // orchestrator emits the marker, but the protocol says the archivist
+    // owns the recording act — so the marker is attributed to the archivist.
     void recordRecordingAndArchival(
       `worker ${workerId} finished with status ${status}`,
       { edenOptions, edenMemoryStatus: memoryTracker.status },
@@ -750,9 +774,12 @@ export default function (pi, options = {}) {
         workerId,
         profileName: params.profileName,
         packageName: "pi-agents-team",
+        agentId: "archivist",
         status,
       },
-    ).catch(() => {});
+    ).catch((err) =>
+      logMemoryWarning(`recordWorkerCompletion (${status}) failed: ${err?.message ?? err}`),
+    );
   }
 
   /**
@@ -843,13 +870,20 @@ export default function (pi, options = {}) {
 
     blockedGoalsReady = (async () => {
       try {
+        // Stage 1 (Goal receipt) is owned by the team-lead. The session_start
+        // hook is the orchestrator's first ATP act; the marker is attributed
+        // to the team-lead because goal-receipt is the team-lead's stage.
         const receiptResult = await recordGoalReceipt(
           `session_start ${new Date().toISOString()}`,
           { edenOptions, edenMemoryStatus: memoryTracker.status, signal: startupSignal },
-          { packageName: "pi-agents-team" },
+          { packageName: "pi-agents-team", agentId: "team-lead" },
         );
         memoryTracker.updateFromWriteResult(receiptResult);
 
+        // The blocked-goals query is a read; it is also a stage-6 archival
+        // act (the archivist surfaces unfinished work). We do not write a
+        // marker for the read, but we log a warning if it fails so the
+        // orchestrator can see the durable record is missing.
         const blockedResult = await findBlockedOrUnfinishedGoals(edenOptions, startupSignal);
         if (blockedResult.ok) {
           lastBlockedGoals = blockedResult.goals;
@@ -995,6 +1029,10 @@ export default function (pi, options = {}) {
 
       if (memoryTracker) {
         const edenOptions = resolveEdenOptions(process.env);
+        // Stage 2 (Routing and assignment) is owned by the dispatcher per
+        // the agentic-team protocol. Attribute this marker to the dispatcher
+        // even though the orchestrator is the call site, so the durable
+        // record is honest about who performed the work.
         void recordRouting(
           `delegated "${params.title}" to ${params.profileName}`,
           { edenOptions, edenMemoryStatus: memoryTracker.status },
@@ -1004,8 +1042,9 @@ export default function (pi, options = {}) {
             workerId,
             profileName: params.profileName,
             packageName: "pi-agents-team",
+            agentId: "dispatcher",
           },
-        ).catch(() => {});
+        ).catch((err) => logMemoryWarning(`recordRouting failed: ${err?.message ?? err}`));
       }
 
       let tmpFilePath = null;

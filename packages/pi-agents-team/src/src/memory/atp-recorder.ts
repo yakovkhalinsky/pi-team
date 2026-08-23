@@ -113,6 +113,13 @@ function buildMetadata(marker, ctx = {}) {
   if (typeof ctx.packageName === "string") metadata.packageName = sanitizeString(ctx.packageName, 128);
   if (typeof ctx.requester === "string") metadata.requester = sanitizeString(ctx.requester, 64);
   if (typeof ctx.worktreePath === "string") metadata.worktreePath = sanitizeString(ctx.worktreePath, 260);
+  if (typeof ctx.agentId === "string" && ctx.agentId.trim().length > 0) {
+    // The actual signer of this marker — the protocol role that performed
+    // the work, not the package that wrote it. Surfaced as both a metadata
+    // field and the CLI --agent-id override, so downstream queries can group
+    // markers by signer without parsing the marker line.
+    metadata.signer = sanitizeString(ctx.agentId, 64);
+  }
   if (typeof ctx.round === "number" && Number.isFinite(ctx.round)) metadata.round = ctx.round;
   if (typeof ctx.supersedes === "string") metadata.supersedes = sanitizeString(ctx.supersedes, 128);
   return metadata;
@@ -164,7 +171,17 @@ async function writeMarker(marker, content, options = {}, ctx = {}) {
     return { ok: false, marker, error, skipped: true };
   }
   const record = buildRecord(marker, content, ctx);
-  const result = await rememberRecord(record, edenOptions, options.signal, options.timeoutMs);
+  // Per-call agent-id override. The protocol says each stage has an owner
+  // (Stage 1 team-lead, Stage 2 dispatcher, Stage 6 archivist, etc.) and
+  // every marker should be attributable to the role that actually performed
+  // the work — not the package that wrote it. Without this override the
+  // --agent-id CLI flag is the env-resolved value, which is fixed at package
+  // scope; with it, a routing marker carries --agent-id "dispatcher", a
+  // recording marker carries "archivist", and so on.
+  const perCallOptions = ctx.agentId && ctx.agentId.trim().length > 0
+    ? { ...edenOptions, agentId: ctx.agentId }
+    : edenOptions;
+  const result = await rememberRecord(record, perCallOptions, options.signal, options.timeoutMs);
   const status = options.edenMemoryStatus;
   if (status) {
     recordEdenMemoryMarker(status, {

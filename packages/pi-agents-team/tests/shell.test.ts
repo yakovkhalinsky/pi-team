@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import extensionFactory, { _testing } from "../src/extensions/pi-agent-team/index.js";
 import { EDEN_ENV_FIELDS } from "../src/src/memory/eden-memory.js";
+import { _testing as _testing_atpRecorder } from "../src/src/memory/atp-recorder.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -161,6 +162,16 @@ function setEdenEnv(bin: string): void {
   process.env[EDEN_ENV_FIELDS.WORKSPACE_ID] = "ws";
   process.env[EDEN_ENV_FIELDS.USER_ID] = "user";
   process.env[EDEN_ENV_FIELDS.AGENT_ID] = "agent";
+  // The fake binary is a Node script that writes JSON to a log file. It
+  // does not speak the LLM-augmented eden-memory protocol, so the test
+  // environment must opt out of semantic search — otherwise the live
+  // eden-memory module refuses to write (missing EDEN_LLM_API_KEY /
+  // EDEN_LLM_BASE_URL) and the test silently skips every remember call.
+  // Forcing semantic search off here makes the test hermetic: it does not
+  // depend on the developer's parent shell environment.
+  process.env[EDEN_ENV_FIELDS.SEMANTIC_SEARCH] = "false";
+  delete process.env[EDEN_ENV_FIELDS.LLM_API_KEY];
+  delete process.env[EDEN_ENV_FIELDS.LLM_BASE_URL];
 }
 
 describe("Path A thin extension shell", () => {
@@ -811,6 +822,19 @@ describe("Path A thin extension shell", () => {
     const logLines = readFileSync(fakeEden.log, "utf-8").trim().split("\n").filter(Boolean);
     const healthCall = logLines.some((line) => line.includes('"subcommand":"health"'));
     assert.ok(healthCall, "should call eden-memory health");
+
+    // Stage 1 (goal-receipt) is owned by the team-lead. The goal-receipt
+    // marker emitted by session_start must carry --agent-id "team-lead",
+    // not the env-resolved value, so the durable record is honest about
+    // who received the goal.
+    const goalReceiptLines = logLines.filter(
+      (line) => line.includes('"subcommand":"remember"') && line.includes("[goal-received]"),
+    );
+    assert.ok(goalReceiptLines.length >= 1, "should call remember for the goal-receipt marker");
+    assert.ok(
+      goalReceiptLines.every((line) => /"--agent-id","team-lead"/.test(line)),
+      "goal-receipt markers must carry --agent-id team-lead",
+    );
   });
 
   it("records ATP routing and completion markers when delegate_task runs with eden-memory enabled", async () => {
@@ -856,6 +880,23 @@ describe("Path A thin extension shell", () => {
     assert.ok(
       rememberLines.some((line) => line.includes("[recorded]")),
       "should record a recording-and-archival marker at worker completion",
+    );
+
+    // Each marker must be attributed to the protocol role that owns the
+    // stage, not the package. Stage 2 (routing) is owned by the dispatcher;
+    // Stage 6 (recording-and-archival) is owned by the archivist. Without
+    // the per-call agent-id override every marker would carry --agent-id
+    // "agent" (the env-resolved value) and the durable record would lie
+    // about who did the work.
+    const routingLines = rememberLines.filter((line) => line.includes("[routing]"));
+    const recordedLines = rememberLines.filter((line) => line.includes("[recorded]"));
+    assert.ok(
+      routingLines.every((line) => /"--agent-id","dispatcher"/.test(line)),
+      "routing markers must carry --agent-id dispatcher",
+    );
+    assert.ok(
+      recordedLines.every((line) => /"--agent-id","archivist"/.test(line)),
+      "recording-and-archival markers must carry --agent-id archivist",
     );
   });
 
@@ -1257,6 +1298,67 @@ describe("Path A thin extension shell", () => {
     assert.match(closureLine, /2 skip/);
     // Zero-count marker should be hidden.
     assert.ok(!lines.some((l) => /\[empty\]/.test(l)));
+  });
+
+  it("memory snapshot surfaces skip-only markers in the widget and footer", () => {
+    // Pre-fix this regression: every remember call returned { ok: false,
+    // skipped: true } when the LLM env vars were missing, but the call
+    // sites in delegate_task swallowed the failure with .catch(() => {}).
+    // The widget's `Memory: ok` line and the per-marker total all lied
+    // about the integration. The fix: buildStatusLine and buildWidgetLines
+    // now surface skipped counts so the user can see the integration is
+    // dropping markers.
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>();
+    const fakeTracker = {
+      status: {
+        healthy: true,
+        byMarker: {
+          "[routing]": { ok: 0, error: 0, skipped: 3 },
+          "[recorded]": { ok: 5, error: 0, skipped: 0 },
+        },
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, []);
+    assert.ok(snap.memory);
+    assert.equal(snap.memory!.ok, true, "tracker reports healthy, so memory.ok is still true");
+    assert.equal(snap.memory!.skippedTotal, 3, "skippedTotal aggregates across markers");
+
+    const line = _testing.buildStatusLine(snap);
+    // The skipped count is in the footer so the user sees the integration
+    // is dropping markers even when the daemon itself is healthy.
+    assert.match(line, /memory: ok \(3 skipped\)/);
+
+    const lines = _testing.buildWidgetLines(snap);
+    // The widget header reflects the skip count too.
+    assert.ok(lines.some((l) => /Memory: ok \(3 skipped\)/.test(l)));
+    // The skip-only routing marker carries a leading "!" glyph.
+    const routingLine = lines.find((l) => /\[routing\]:/.test(l));
+    assert.ok(routingLine, "routing marker should be rendered");
+    assert.match(routingLine, /^  !/);
+    assert.match(routingLine, /3 skip/);
+    // The recorded marker is healthy and carries a leading space, not "!".
+    const recordedLine = lines.find((l) => /\[recorded\]:/.test(l));
+    assert.ok(recordedLine);
+    assert.match(recordedLine, /^ {2}(?!!)/);
+    assert.match(recordedLine, /5 ok/);
+  });
+
+  it("buildRecord attributes the marker to ctx.agentId and surfaces it as metadata.signer", () => {
+    // The protocol says each stage has an owner and every marker should
+    // be attributable to the role that actually performed the work. The
+    // buildRecord test exercises the metadata side directly so a future
+    // change that drops the signer field is caught here.
+    const { buildRecord } = _testing_atpRecorder;
+    const record = buildRecord("[routing]", "delegated to builder", {
+      goalId: "g1",
+      taskId: "w1",
+      agentId: "dispatcher",
+    });
+    assert.equal(record.metadata.signer, "dispatcher", "signer mirrors ctx.agentId");
+    // The marker line also carries an owner: field derived from the spec
+    // (not the signer), so the existing owner contract is preserved.
+    assert.match(record.content, /owner:dispatcher/);
   });
 
   it("memory snapshot reports ok when tracker is healthy", () => {
