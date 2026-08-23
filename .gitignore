@@ -17,3 +17,9 @@ node_modules/
 .env
 .env.local
 .env.*.local
+# Pi Team runtime
+.pi-team/workspace/
+.pi-team/.teamwork/
+.pi-team/worktrees/
+.env
+

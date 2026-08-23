@@ -1,5 +1,5 @@
 {
   "packages": [
-    "./../packages/pi-agents-team"
+    "../packages/pi-agents-team"
   ]
 }
