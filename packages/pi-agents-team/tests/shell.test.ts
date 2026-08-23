@@ -1011,8 +1011,8 @@ describe("Path A thin extension shell", () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     const setStatusCalls = (ctx as any).__test.setStatusCalls;
-    const running = setStatusCalls.find((c: any) => /running/.test(String(c.value)));
-    assert.ok(running, "status line should mention running worker");
+    const running = setStatusCalls.find((c: any) => /builder working on "Hanging task"/.test(String(c.value)));
+    assert.ok(running, "status line should name the running worker and its task");
     assert.match(String(running!.value), /builder/);
 
     // Abort so the test doesn't leak.
@@ -1126,16 +1126,124 @@ describe("Path A thin extension shell", () => {
     }
   });
 
+  it("formatDuration returns compact human strings", () => {
+    assert.equal(_testing.formatDuration(0), "0s");
+    assert.equal(_testing.formatDuration(5_000), "5s");
+    assert.equal(_testing.formatDuration(59_000), "59s");
+    assert.equal(_testing.formatDuration(60_000), "1m");
+    assert.equal(_testing.formatDuration(125_000), "2m5s");
+    assert.equal(_testing.formatDuration(3_600_000), "1h0m");
+    assert.equal(_testing.formatDuration(3_900_000), "1h5m");
+    assert.equal(_testing.formatDuration(Number.NaN), "?");
+    assert.equal(_testing.formatDuration(-100), "?");
+  });
+
+  it("snapshot surfaces live running workers ahead of the roster", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>([
+      [
+        "w1",
+        {
+          workerId: "w1",
+          profileName: "builder",
+          title: "Investigate flaky test",
+          status: "running",
+          startTime: Date.now() - 12_000,
+          pendingRelayQuestions: [],
+        },
+      ],
+    ]);
+    const snap = _testing.buildTeamSnapshot(agents, workers, null, []);
+
+    // Active worker is reflected in the snapshot.
+    assert.equal(snap.workers.running.length, 1);
+    assert.equal(snap.workers.running[0].profileName, "builder");
+    assert.match(snap.workers.running[0].duration, /^(\d+s|\d+m(\d+s)?)$/);
+
+    // Footer status names the running worker and its task — not the roster.
+    const line = _testing.buildStatusLine(snap);
+    assert.match(line, /Team — builder working on "Investigate flaky test"/);
+    assert.match(line, /\d+s/);
+
+    // Widget puts active work first, agent roster later.
+    const lines = _testing.buildWidgetLines(snap);
+    const activeIdx = lines.findIndex((l) => /Active workers/.test(l));
+    const agentIdx = lines.findIndex((l) => /^Agents:/.test(l));
+    assert.ok(activeIdx >= 0 && agentIdx > activeIdx, "active workers must precede the agent roster");
+    assert.ok(
+      lines[activeIdx + 1]?.includes("Investigate flaky test"),
+      "active worker line must include the task title",
+    );
+  });
+
+  it("snapshot surfaces recent terminal workers and caps the list", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const now = Date.now();
+    const workers = new Map<string, any>();
+    // Six terminal workers: 3 completed, 3 errored. The cap is 5.
+    const records = [
+      { id: "a", status: "completed", title: "A", startOffset: 600_000, endOffset: 540_000 },
+      { id: "b", status: "completed", title: "B", startOffset: 540_000, endOffset: 480_000 },
+      { id: "c", status: "error", title: "C", startOffset: 480_000, endOffset: 420_000 },
+      { id: "d", status: "completed", title: "D", startOffset: 420_000, endOffset: 360_000 },
+      { id: "e", status: "aborted", title: "E", startOffset: 360_000, endOffset: 300_000 },
+      { id: "f", status: "completed", title: "F", startOffset: 300_000, endOffset: 240_000 }, // newest
+    ];
+    for (const r of records) {
+      workers.set(r.id, {
+        workerId: r.id,
+        profileName: "builder",
+        title: r.title,
+        status: r.status,
+        startTime: now - r.startOffset,
+        endTime: now - r.endOffset,
+        pendingRelayQuestions: [],
+      });
+    }
+
+    const snap = _testing.buildTeamSnapshot(agents, workers, null, [], now);
+    assert.equal(snap.workers.recent.length, 5, "recent is capped at 5");
+    assert.equal(snap.workers.recent[0].title, "F", "most recent first");
+    assert.equal(snap.workers.completed, 4);
+    assert.equal(snap.workers.errored, 2);
+
+    const lines = _testing.buildWidgetLines(snap, now);
+    const recentIdx = lines.findIndex((l) => /Recent \(last/.test(l));
+    assert.ok(recentIdx >= 0, "widget must include Recent section when there are terminal workers");
+    assert.ok(lines.some((l) => /totals: 6/.test(l)), "totals reflect all workers including the capped-out one");
+    assert.ok(!lines.some((l) => /"A"/.test(l)), "oldest terminal worker is dropped by the cap");
+
+    const line = _testing.buildStatusLine(snap);
+    // No running workers, so footer falls back to idle form with totals.
+    assert.match(line, /Team \(\d+ agents?\)/);
+    assert.match(line, /4 done, 2 failed/);
+  });
+
+  it("snapshot shows zero-state cleanly when no workers have run", () => {
+    const agents = _testing.discoverAgents(process.cwd());
+    const snap = _testing.buildTeamSnapshot(agents, new Map(), null, []);
+    assert.equal(snap.workers.total, 0);
+    assert.equal(snap.workers.running.length, 0);
+    assert.equal(snap.workers.recent.length, 0);
+    const line = _testing.buildStatusLine(snap);
+    assert.match(line, /^Team \(\d+ agents?\)$/);
+    const lines = _testing.buildWidgetLines(snap);
+    // No Active, no Recent; the agent roster still shows as a one-liner.
+    assert.ok(!lines.some((l) => /Active workers/.test(l)));
+    assert.ok(!lines.some((l) => /Recent \(last/.test(l)));
+    assert.ok(lines.some((l) => /^Agents:/.test(l)));
+  });
+
   it("buildTeamSnapshot and buildStatusLine produce expected shapes", () => {
     const agents = _testing.discoverAgents(process.cwd());
     const workers = new Map<string, any>([
       [
         "w1",
-        { workerId: "w1", profileName: "builder", title: "T1", status: "running", pendingRelayQuestions: [] },
+        { workerId: "w1", profileName: "builder", title: "T1", status: "running", startTime: Date.now() - 30_000, pendingRelayQuestions: [] },
       ],
       [
         "w2",
-        { workerId: "w2", profileName: "verifier", title: "T2", status: "completed", pendingRelayQuestions: [], result: {}, finalAnswer: "" },
+        { workerId: "w2", profileName: "verifier", title: "T2", status: "completed", startTime: Date.now() - 90_000, endTime: Date.now() - 60_000, pendingRelayQuestions: [], result: {}, finalAnswer: "" },
       ],
     ]);
     const fakeTracker = {
@@ -1156,10 +1264,11 @@ describe("Path A thin extension shell", () => {
     assert.equal(snap.memory!.byMarker.length, 2);
 
     const line = _testing.buildStatusLine(snap);
-    assert.match(line, /Team \(\d+ agents?\)/);
-    assert.match(line, /1 running: builder/);
+    // Single running worker: header should name the profile and the task.
+    assert.match(line, /Team — builder working on "T1"/);
     assert.match(line, /memory: ok/);
     assert.match(line, /1 blocked/);
+    assert.doesNotMatch(line, /\d+ running:/, "single-running footer should not use the multi-running form");
 
     const lines = _testing.buildWidgetLines(snap);
     assert.ok(Array.isArray(lines));
@@ -1167,6 +1276,64 @@ describe("Path A thin extension shell", () => {
     assert.ok(lines[0].includes("Pi Agents Team"));
     assert.ok(lines.some((l) => /Memory: ok/.test(l)));
     assert.ok(lines.some((l) => /byMarker:/.test(l)));
+    // The tracker shape from createMemoryStatusTracker is {ok, error, skipped}
+    // buckets, not raw numbers. The widget must render a real count for each
+    // marker, not the toString of the bucket object.
+    const routingLine = lines.find((l) => /\[routing\]:/.test(l));
+    assert.ok(routingLine, "routing marker should be rendered");
+    assert.doesNotMatch(routingLine, /\[object Object\]/);
+    assert.match(routingLine, /\[routing\]:\s*3/);
+    // Active worker must be surfaced prominently: the running profile name
+    // should appear in the panel with its task title, before the agents
+    // one-liner.
+    const activeIdx = lines.findIndex((l) => /Active workers/.test(l));
+    const builderIdx = lines.findIndex((l) => l.includes("builder") && l.includes("T1"));
+    const agentIdx = lines.findIndex((l) => /^Agents:/.test(l));
+    assert.ok(activeIdx >= 0, "widget should have an Active workers section");
+    assert.ok(builderIdx > activeIdx, "active worker entry should appear in Active section");
+    assert.ok(agentIdx > builderIdx, "agent roster should come after active worker");
+  });
+
+  it("byMarker renders the production bucket shape (ok/error/skipped)", () => {
+    // Mirrors the shape that createMemoryStatusTracker / aggregateEdenMemoryStatus
+    // actually produce. Pre-fix this rendered as "[action]: [object Object]".
+    const agents = _testing.discoverAgents(process.cwd());
+    const workers = new Map<string, any>();
+    const fakeTracker = {
+      status: {
+        enabled: true,
+        healthy: true,
+        byMarker: {
+          "[action]": { ok: 5, error: 1, skipped: 0 },
+          "[closure]": { ok: 0, error: 0, skipped: 2 },
+          "[empty]": { ok: 0, error: 0, skipped: 0 },
+        },
+      },
+    };
+    const snap = _testing.buildTeamSnapshot(agents, workers, fakeTracker, []);
+    assert.ok(snap.memory);
+    // Zero-bucket markers are filtered out — they would otherwise be noise.
+    assert.equal(snap.memory!.byMarker.length, 2);
+    const action = snap.memory!.byMarker.find((e) => e.marker === "[action]")!;
+    assert.equal(action.total, 6);
+    assert.equal(action.ok, 5);
+    assert.equal(action.error, 1);
+    const closure = snap.memory!.byMarker.find((e) => e.marker === "[closure]")!;
+    assert.equal(closure.total, 2);
+    assert.equal(closure.skipped, 2);
+
+    const lines = _testing.buildWidgetLines(snap);
+    const actionLine = lines.find((l) => /\[action\]:/.test(l));
+    assert.ok(actionLine, "action marker should be rendered");
+    assert.doesNotMatch(actionLine, /\[object Object\]/);
+    assert.match(actionLine, /\[action\]:\s*6/);
+    assert.match(actionLine, /5 ok/);
+    assert.match(actionLine, /1 err/);
+    const closureLine = lines.find((l) => /\[closure\]:/.test(l));
+    assert.ok(closureLine, "closure marker should be rendered");
+    assert.match(closureLine, /2 skip/);
+    // Zero-count marker should be hidden.
+    assert.ok(!lines.some((l) => /\[empty\]/.test(l)));
   });
 
   it("memory snapshot reports ok when tracker is healthy", () => {

@@ -265,21 +265,70 @@ export const TEAM_STATUS_KEY = "pi-agents-team";
 export const TEAM_WIDGET_KEY = "pi-agents-team";
 
 /**
+ * Maximum number of recent (terminal) workers to surface in the widget. Caps
+ * the panel growth across long sessions without hiding recent activity.
+ */
+const RECENT_WORKERS_LIMIT = 5;
+
+/**
+ * Format a duration in milliseconds as a compact human-readable string. Used
+ * in both the footer status and the widget to give the user a sense of how
+ * long a worker has been (or was) running.
+ */
+export function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "?";
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours}h${remainingMinutes}m`;
+}
+
+/**
  * Snapshot of everything the team-status widget needs to render. Pure data —
  * no UI references, no closure references. Tests can build and assert on this
  * without standing up a UI surface.
+ *
+ * Shape is biased toward live activity:
+ *  - workers.running: in-flight workers with timing + task identity
+ *  - workers.recent:  last N terminal workers (profile, title, status, duration)
+ *  - workers.{completed,errored}: aggregate counts
+ *  - agentNames:      flat array for one-line roster summary
+ *  - agents:          full roster with descriptions (only used by /agents cmd)
+ *  - memory:          eden-memory summary when enabled, else null
  */
-export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoals) {
+export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoals, now = Date.now()) {
   const workerList = Array.from(workers.values());
   const running = workerList.filter((w) => !isTerminalStatus(w.status));
+  const terminal = workerList
+    .filter((w) => isTerminalStatus(w.status))
+    .sort((a, b) => (b.endTime ?? 0) - (a.endTime ?? 0));
+  const recent = terminal.slice(0, RECENT_WORKERS_LIMIT);
   const completed = workerList.filter((w) => w.status === "completed").length;
   const errored = workerList.filter((w) => w.status === "error" || w.status === "aborted").length;
 
   let memory = null;
   if (memoryTracker?.status?.enabled) {
     const byMarker = memoryTracker.status.byMarker ?? {};
+    // Production trackers (createMemoryStatusTracker / aggregateEdenMemoryStatus)
+    // store per-marker buckets as { ok, error, skipped } objects, not numbers.
+    // Normalize both shapes here so the widget never has to care, and so the
+    // displayed count reflects real activity (ok + error + skipped) instead of
+    // stringifying the bucket to "[object Object]".
     const histogramEntries = Object.entries(byMarker)
-      .map(([marker, count]) => ({ marker, count }))
+      .map(([marker, value]) => {
+        if (typeof value === "number") {
+          return { marker, ok: value, error: 0, skipped: 0, total: value };
+        }
+        const ok = Number(value?.ok ?? 0) || 0;
+        const error = Number(value?.error ?? 0) || 0;
+        const skipped = Number(value?.skipped ?? 0) || 0;
+        return { marker, ok, error, skipped, total: ok + error + skipped };
+      })
+      .filter((e) => e.total > 0)
       .sort((a, b) => a.marker.localeCompare(b.marker));
     memory = {
       enabled: true,
@@ -292,10 +341,25 @@ export function buildTeamSnapshot(agents, workers, memoryTracker, lastBlockedGoa
 
   return {
     agentCount: agents.length,
+    agentNames: agents.map((a) => a.name),
     agents: agents.map((a) => ({ name: a.name, description: a.description, source: a.source })),
     workers: {
       total: workerList.length,
-      running: running.map((w) => ({ workerId: w.workerId, profileName: w.profileName, title: w.title })),
+      running: running.map((w) => ({
+        workerId: w.workerId,
+        profileName: w.profileName,
+        title: w.title,
+        startTime: w.startTime ?? now,
+        duration: formatDuration(now - (w.startTime ?? now)),
+      })),
+      recent: recent.map((w) => ({
+        workerId: w.workerId,
+        profileName: w.profileName,
+        title: w.title,
+        status: w.status,
+        duration: formatDuration((w.endTime ?? now) - (w.startTime ?? now)),
+        endTime: w.endTime ?? now,
+      })),
       completed,
       errored,
     },
@@ -309,20 +373,27 @@ function fmt(text) {
 
 /**
  * One-line summary for the footer status slot. Always non-empty. Pure: only
- * depends on the snapshot.
+ * depends on the snapshot. The bias is toward activity: a single running
+ * worker is named explicitly ("builder working on "fix bug" · 2m") so the
+ * user can see what's happening without opening the widget.
  */
 export function buildStatusLine(snapshot) {
-  const { agentCount, workers, memory } = snapshot;
+  const { workers, memory } = snapshot;
   const parts = [];
-  parts.push(`Team (${agentCount} agent${agentCount === 1 ? "" : "s"})`);
-  if (workers.total > 0) {
-    if (workers.running.length > 0) {
-      const names = workers.running.map((w) => w.profileName).join(", ");
-      parts.push(`${workers.running.length} running: ${names}`);
-    } else {
+
+  if (workers.running.length === 1) {
+    const w = workers.running[0];
+    parts.push(`Team — ${w.profileName} working on "${w.title}" · ${w.duration}`);
+  } else if (workers.running.length > 1) {
+    const names = workers.running.map((w) => w.profileName).join(", ");
+    parts.push(`Team — ${workers.running.length} active: ${names}`);
+  } else {
+    parts.push(`Team (${snapshot.agentCount} agent${snapshot.agentCount === 1 ? "" : "s"})`);
+    if (workers.total > 0) {
       parts.push(`${workers.completed} done, ${workers.errored} failed`);
     }
   }
+
   if (memory?.enabled) {
     parts.push(memory.ok ? "memory: ok" : "memory: degraded");
     if (memory.blockedGoalCount > 0) parts.push(`${memory.blockedGoalCount} blocked`);
@@ -333,37 +404,66 @@ export function buildStatusLine(snapshot) {
 /**
  * Multi-line panel for the below-editor widget. Pure. Caps at ~30 lines so it
  * doesn't push the chat scrollback too far.
+ *
+ * Priority: active work first, recent work second, then the agent roster as a
+ * collapsed one-liner. The static roster was the previous headline, which
+ * buried live activity behind a wall of "agent type" descriptions — exactly
+ * the user-reported UX problem this layout fixes.
  */
-export function buildWidgetLines(snapshot) {
+export function buildWidgetLines(snapshot, now = Date.now()) {
   const lines = [];
-  lines.push(`Pi Agents Team — ${snapshot.agentCount} agent${snapshot.agentCount === 1 ? "" : "s"} discovered`);
+  const activeCount = snapshot.workers.running.length;
+  const recentCount = snapshot.workers.recent.length;
+  const headerSuffix = activeCount > 0
+    ? ` · ${activeCount} active`
+    : recentCount > 0
+      ? ` · ${recentCount} recent`
+      : "";
+  lines.push(
+    `Pi Agents Team — ${snapshot.agentCount} agent${snapshot.agentCount === 1 ? "" : "s"}${headerSuffix}`,
+  );
   lines.push("");
 
-  if (snapshot.agentCount > 0) {
-    lines.push("Agents:");
-    const shown = snapshot.agents.slice(0, 12);
-    for (const a of shown) {
-      lines.push(`  - ${a.name} (${a.source}): ${a.description}`);
+  // Active workers first — this is what the user wants to see.
+  if (activeCount > 0) {
+    lines.push(`Active workers (${activeCount}):`);
+    for (const w of snapshot.workers.running) {
+      lines.push(`  ● ${w.profileName} — "${w.title}" · ${w.duration}`);
     }
-    if (snapshot.agents.length > shown.length) {
-      lines.push(`  … and ${snapshot.agents.length - shown.length} more (use /agents)`);
-    }
-    lines.push("");
-  } else {
-    lines.push("No agents discovered. Place profiles in .pi/agents/*.md");
     lines.push("");
   }
 
-  if (snapshot.workers.total > 0) {
-    lines.push("Workers:");
-    if (snapshot.workers.running.length > 0) {
-      for (const w of snapshot.workers.running) {
-        lines.push(`  ● ${w.profileName} — ${w.title} (${w.workerId})`);
-      }
+  // Recent terminal workers — short history so the user sees what just happened.
+  if (recentCount > 0) {
+    lines.push(`Recent (last ${Math.min(recentCount, RECENT_WORKERS_LIMIT)}):`);
+    for (const w of snapshot.workers.recent) {
+      const glyph = w.status === "completed" ? "✓" : w.status === "aborted" ? "⊘" : "✗";
+      lines.push(`  ${glyph} ${w.profileName} — "${w.title}" · ${w.duration} · ${w.status}`);
     }
     lines.push(
-      `  total: ${snapshot.workers.total} · done: ${snapshot.workers.completed} · failed: ${snapshot.workers.errored}`,
+      `  totals: ${snapshot.workers.total} · done: ${snapshot.workers.completed} · failed: ${snapshot.workers.errored}`,
     );
+    lines.push("");
+  } else if (snapshot.workers.total > 0) {
+    // Total > 0 but nothing in recent — shouldn't happen with our limit, but
+    // be defensive so the widget never silently drops the totals line.
+    lines.push(
+      `Totals: ${snapshot.workers.total} · done: ${snapshot.workers.completed} · failed: ${snapshot.workers.errored}`,
+    );
+    lines.push("");
+  }
+
+  // Agent roster — collapsed one-liner so the static info is present but
+  // doesn't dominate. The detailed list is still available via /agents.
+  if (snapshot.agentCount > 0) {
+    const names = snapshot.agentNames.slice(0, 8).join(" · ");
+    const overflow = snapshot.agentNames.length > 8
+      ? ` · (+${snapshot.agentNames.length - 8} more)`
+      : "";
+    lines.push(`Agents: ${names}${overflow}`);
+    lines.push("");
+  } else {
+    lines.push("No agents discovered. Place profiles in .pi/agents/*.md");
     lines.push("");
   }
 
@@ -376,7 +476,12 @@ export function buildWidgetLines(snapshot) {
     if (snapshot.memory.byMarker.length > 0) {
       lines.push("  byMarker:");
       for (const e of snapshot.memory.byMarker) {
-        lines.push(`    ${e.marker}: ${e.count}`);
+        const breakdown = [];
+        if (e.ok) breakdown.push(`${e.ok} ok`);
+        if (e.error) breakdown.push(`${e.error} err`);
+        if (e.skipped) breakdown.push(`${e.skipped} skip`);
+        const detail = breakdown.length > 0 ? ` (${breakdown.join(", ")})` : "";
+        lines.push(`    ${e.marker}: ${e.total}${detail}`);
       }
     }
     lines.push("");
@@ -518,6 +623,7 @@ export const _testing = {
   buildTeamSnapshot,
   buildStatusLine,
   buildWidgetLines,
+  formatDuration,
 };
 
 export default function (pi, options = {}) {
