@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>pi TUI Prototypes — Multi-Agent Workflow UI</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<style>
+  :root {
+    --bg: #1a1b26;
+    --bg-2: #16161e;
+    --fg: #c0caf5;
+    --fg-dim: #565f89;
+    --accent: #7aa2f7;
+    --green: #9ece6a;
+    --yellow: #e0af68;
+    --red: #f7768e;
+    --cyan: #7dcfff;
+    --magenta: #bb9af7;
+    --orange: #ff9e64;
+    --border: #292e42;
+    --selected: #283457;
+    --bg-active: #1f2335;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Menlo, monospace;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+  .tabbar {
+    display: flex; background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 1rem; height: 38px; align-items: center; gap: 0.25rem;
+  }
+  .tabbar .label { color: var(--fg-dim); font-size: 11px; margin-right: 1rem; letter-spacing: 0.5px; }
+  .tab {
+    padding: 6px 14px; font-size: 12px; color: var(--fg-dim);
+    cursor: pointer; border-radius: 4px; user-select: none;
+    transition: all 0.1s; border: 1px solid transparent;
+  }
+  .tab:hover { background: var(--bg-active); color: var(--fg); }
+  .tab.active { background: var(--selected); color: var(--fg); border-color: var(--border); }
+  .tabbar .meta {
+    margin-left: auto; color: var(--fg-dim); font-size: 11px;
+    display: flex; gap: 1.25rem; align-items: center;
+  }
+  .meta-item .glyph { color: var(--accent); margin-right: 4px; }
+  .meta-item .label { color: var(--fg-dim); margin-right: 4px; }
+  .view { overflow: hidden; position: relative; }
+  .terminal-host { width: 100%; height: 100%; padding: 4px 6px; }
+  .footer {
+    background: var(--bg-2); border-top: 1px solid var(--border);
+    padding: 4px 12px; font-size: 12px; color: var(--fg-dim);
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  }
+  .footer .sep { color: var(--border); }
+  .footer .accent { color: var(--accent); }
+  .footer .ok { color: var(--green); }
+  .footer .warn { color: var(--yellow); }
+  .footer .err { color: var(--red); }
+  .xterm-viewport { background-color: var(--bg) !important; }
+  .xterm .xterm-screen { background-color: var(--bg) !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="tabbar">
+    <span class="label">▌ PROTOTYPES</span>
+    <div class="tab active" data-tab="dashboard">1 · Fleet Dashboard</div>
+    <div class="tab" data-tab="dispatch">2 · Dispatch Loop</div>
+    <div class="tab" data-tab="assertions">3 · Assertions Pane</div>
+    <div class="tab" data-tab="returns">4 · Returns Pane</div>
+    <div class="tab" data-tab="parity">5 · Parity Pane</div>
+    <div class="tab" data-tab="passport">6 · Passport</div>
+    <div class="tab" data-tab="modal">7 · Session Modal</div>
+    <div class="tab" data-tab="compact">8 · Compact Widget</div>
+    <div class="meta">
+      <span class="meta-item"><span class="glyph">◆</span><span class="label">workflow:</span><span style="color:var(--magenta)">/af-build</span></span>
+      <span class="meta-item"><span class="glyph">▸</span><span class="label">tier:</span><span style="color:var(--accent)">feature</span></span>
+    </div>
+  </div>
+  <div class="view"><div id="terminal" class="terminal-host"></div></div>
+  <div class="footer">
+    <span><span class="accent">agent fleet</span> v1.4.2 · catppuccin</span>
+    <span class="sep">│</span>
+    <span>build · /af-build</span>
+    <span class="sep">│</span>
+    <span>tier <span class="accent">feature</span></span>
+    <span class="sep">│</span>
+    <span>turn <span class="ok">2/8</span></span>
+    <span class="sep">│</span>
+    <span>task <span class="warn">5/18</span></span>
+    <span class="sep">│</span>
+    <span class="ok">Assertions: 2✓ 1○ 1✗ · open: A4</span>
+    <span class="sep">│</span>
+    <span>Σ <span class="accent">$0.42</span> (D $0.08 · R $0.12 · B $0.18 · V $0.04)</span>
+    <span style="margin-left:auto">Alt+A fleet · Alt+M operator · Alt+Shift+A widget:compact</span>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelir.net/npm/@xterm/addon-fit@0.10.0/lib/xterm-addon-fit.js"></script>
+<script>
+'use strict';
+
+const C = {
+  reset: '\x1b[0m', bold: '\x1b[1m', dim: '\x1b[2m', italic: '\x1b[3m',
+  ul: '\x1b[4m', rev: '\x1b[7m', fg: '\x1b[38;5;189m', fgDim: '\x1b[38;5;60m',
+  bg: '\x1b[48;5;235m', bgSel: '\x1b[48;5;60m', accent: '\x1b[38;5;111m',
+  cyan: '\x1b[38;5;81m', green: '\x1b[38;5;114m', yellow: '\x1b[38;5;179m',
+  red: '\x1b[38;5;203m', magenta: '\x1b[38;5;141m', orange: '\x1b[38;5;215m',
+};
+const bg = (s, color) => `${color}${s}${C.reset}`;
+const ok = (s) => `${C.green}${s}${C.reset}`;
+const warn = (s) => `${C.yellow}${s}${C.reset}`;
+const err = (s) => `${C.red}${s}${C.reset}`;
+const acc = (s) => `${C.accent}${s}${C.reset}`;
+const dim = (s) => `${C.dim}${s}${C.reset}`;
+const cyan = (s) => `${C.cyan}${s}${C.reset}`;
+const mag = (s) => `${C.magenta}${s}${C.reset}`;
+const bold = (s) => `${C.bold}${s}${C.reset}`;
+
+const BOX = {
+  TL: '╭', TR: '╮', BL: '╰', BR: '╯', H: '─', V: '│',
+  T: '┬', B: '┴', L: '├', R: '┤', X: '┼',
+};
+
+const term = new Terminal({
+  fontFamily: '"JetBrains Mono", "Fira Code", "SF Mono", Menlo, monospace',
+  fontSize: 13, lineHeight: 1.2, cursorBlink: false, cursorStyle: 'bar',
+  theme: {
+    background: '#1a1b26', foreground: '#c0caf5', cursor: '#7aa2f7',
+    black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+    blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a',
+    brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7',
+    brightCyan: '#7dcfff', brightWhite: '#c0caf5',
+  },
+  scrollback: 10000, allowProposedApi: true,
+});
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+const views = {};
+
+// ============ 1. FLEET DASHBOARD ============
+views.dashboard = function () {
+  const { cols } = term;
+  let out = '';
+  out += '\x1b[H';
+  out += `${bg(' Fleet Dashboard · /af-agents-list ', C.bg)} `;
+  out += `${acc('hub-pi-001')} · `;
+  out += `${dim('project:')} ${acc('eda-monorepo')} · `;
+  out += `${dim('tier:')} ${mag('feature')} · `;
+  out += `${dim('mode:')} ${cyan('standard')}\r\n`;
+  out += `${dim('Filter: ')} ${acc('[f]')} name/model/work · ${acc('[a]')} toggle finished (off) · ${acc('[x]')} kill · ${acc('[r]')} restart · ${acc('[q]')} close\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Summary')}  `;
+  out += `${ok('●')} running ${bold('4')} · ${dim('✓')} done ${bold('2')} · ${err('✗')} failed ${bold('0')} · ${warn('◌')} waiting ${bold('1')}\r\n`;
+  out += `${dim('overlap-aware wall time:')} ${acc('3m 24s')} · ${dim('tokens:')} ${acc('142,318')} · ${dim('cost:')} ${ok('$0.42')}\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  const row = (sel, glyph, name, model, ctx, state, status, depth) => {
+    const prefix = sel ? `${C.rev} ▶ ${C.reset}` : '   ';
+    const g = glyph === '●' ? ok(glyph) : glyph === '✗' ? err(glyph) : glyph === '◐' ? warn(glyph) : dim(glyph);
+    const d = depth ? `  ${dim(depth)}` : '';
+    return `${prefix} ${g} ${bold(name)}  ${dim('model:')} ${model}  ${dim('ctx:')} ${ctx}  ${dim('state:')} ${state}  ${status}${d}\r\n`;
+  };
+
+  out += `${mag('▸ Hub (orchestrator)')}\r\n`;
+  out += row(true, '●', 'orchestrator (hub-pi-001)', 'claude-opus-4.6', '67%', warn('synthesising'), acc('composing A4..A6'), '');
+  out += '\r\n';
+
+  out += `${cyan('▸ Native roster')}\r\n`;
+  out += row(false, '◐', 'planner', 'gpt-5.5 (xh)', '34%', warn('running'), ok('planning task breakdown'), '↳ delegate scout');
+  out += row(false, '◐', 'plan-reviewer', 'gpt-5.5 (xh)', '12%', warn('running'), ok('validating feasibility'), '↳ delegate deps');
+  out += row(false, '●', 'builder', 'github-copilot/claude-sonnet-4.6', '58%', warn('running'), warn('scoped write · review pending'), '↳ delegate recon');
+  out += row(false, '●', 'code-reviewer ⇄coms', 'claude-opus-4.7', '22%', warn('working'), acc('reviewing diff'), '↳ delegate preflight');
+  out += row(false, '✓', 'test-engineer', 'gpt-5.4', '—', ok('idle'), dim('awaiting verifier'), '');
+  out += row(false, '✓', 'documenter', 'gpt-5.3-codex-spark', '—', ok('idle'), dim('awaiting delivery'), '');
+  out += '\r\n';
+
+  out += `${cyan('▸ Research helpers')}\r\n`;
+  out += row(false, '◐', 'r1: deep-researcher', 'gpt-5.5 (xh)', '8%', warn('running'), acc('parity inventory · EDA library APIs'), '');
+  out += row(false, '✓', 'r2: researcher', 'gpt-5.3-codex-spark', '—', ok('done'), dim('wrote findings/eda-cache.md'), '');
+  out += '\r\n';
+
+  out += `${cyan('▸ Coms peers')} ${dim('(pool: eda-monorepo · 3 visible)')}\r\n`;
+  out += row(false, '◐', 'architect  ⇄coms', 'claude-opus-4.6', '41%', warn('booting'), acc('peer_ready · pane 14'), '');
+  out += row(false, '⊘', 'releaser    ⇄coms', 'claude-opus-4.6', '—', warn('detached'), dim('process alive · no pane · ask_user still reachable'), '');
+  out += row(false, '✗', 'web-debugger', 'claude-sonnet-4.6', '—', err('vanished 4m'), dim('last activity: navigate(about:blank)'), '');
+  out += '\r\n';
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('↑↓')} select  ${dim('Enter')} detail  ${dim('f')} filter  ${dim('a')} finished  ${dim('x')} kill  ${dim('r')} restart  ${dim('q/Esc')} close\r\n`;
+  return out;
+};
+
+// ============ 2. DISPATCH LOOP ============
+views.dispatch = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Dispatch Loop — assign → track → verify → synthesise → escalate ', C.bg) + '\r\n\r\n';
+  out += `${dim('Current task:')} ${bold('T-2026-0142')}  ${dim('created:')} ${acc('2m 14s ago')}  ${dim('owner:')} ${cyan('orchestrator · hub-pi-001')}\r\n`;
+  out += `${dim('Summary:')} "Implement EDA library API parity across Walkover/Retired/Disqualified cancellation types"\r\n`;
+  out += `${dim('Tier:')} ${mag('feature')} · ${dim('Assertions:')} ${ok('2✓')} ${warn('1○')} ${err('1✗')} ${dim('· open:')} ${acc('A4')} · ${dim('Turn:')} ${acc('2/8')} ${dim('Task:')} ${warn('5/18')}\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Five-role state machine')} ${dim('(each box shows current transition + evidence)')}\r\n\r\n`;
+
+  const row = [
+    { name: 'Dispatcher', role: 'hub-pi-001', state: 'synthesising', next: 'handoff_evidence → verifier', glyph: '◐', tone: warn, evid: 'A1..A6 ledger persisted' },
+    { name: 'Researcher', role: 'r1: deep-res.', state: 'running', next: 'submit_evidence → dispatcher', glyph: '◐', tone: warn, evid: 'parity inventory · 7 sites' },
+    { name: 'Verifier', role: 'plan-reviewer ⇄coms', state: 'booting', next: 'review_evidence', glyph: '◐', tone: warn, evid: 'awaiting r1 evidence' },
+    { name: 'Builder', role: 'builder', state: 'scoped-write', next: 'submit_deliverable', glyph: '●', tone: ok, evid: 'scope: src/eda/**' },
+    { name: 'Archivist', role: 'compound learning', state: 'idle', next: 'awaiting complete_task', glyph: '◌', tone: dim, evid: 'rules/ + docs/ ready' },
+  ];
+
+  const boxW = 22, boxH = 9, startY = 7, gapX = 1;
+  const startX = Math.max(1, Math.floor((cols - (row.length * boxW + (row.length - 1) * gapX)) / 2));
+  for (let i = 0; i < row.length; i++) {
+    const r = row[i];
+    const x = startX + i * (boxW + gapX);
+    out += `\x1b[${startY};${x}H` + BOX.TL + BOX.H.repeat(boxW - 2) + BOX.TR + '\r\n';
+    out += `\x1b[${startY + 1};${x}H` + BOX.V + ' ' + r.tone(r.glyph + ' ') + bold(r.name.slice(0, boxW - 4)) + ' '.repeat(Math.max(0, boxW - 3 - r.name.length)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 2};${x}H` + BOX.V + ' ' + dim('role: ') + r.role.slice(0, boxW - 8) + ' '.repeat(Math.max(0, boxW - 9 - r.role.length)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 3};${x}H` + BOX.V + ' ' + dim('state: ') + r.state.slice(0, boxW - 9) + ' '.repeat(Math.max(0, boxW - 10 - r.state.length)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 4};${x}H` + BOX.L + BOX.H.repeat(boxW - 2) + BOX.R + '\r\n';
+    out += `\x1b[${startY + 5};${x}H` + BOX.V + ' next:' + ' '.repeat(Math.max(0, boxW - 7)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 6};${x}H` + BOX.V + ' ' + r.next.slice(0, boxW - 3) + ' '.repeat(Math.max(0, boxW - 4 - r.next.length)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 7};${x}H` + BOX.V + ' evidence:' + ' '.repeat(Math.max(0, boxW - 11)) + BOX.V + '\r\n';
+    out += `\x1b[${startY + 8};${x}H` + BOX.BL + BOX.H.repeat(boxW - 2) + BOX.BR + '\r\n';
+    if (i < row.length - 1) {
+      const arrowX = x + boxW + Math.floor(gapX / 2);
+      out += `\x1b[${startY + 4};${arrowX}H` + acc('→') + '\r\n';
+    }
+  }
+
+  const legendY = startY + boxH + 2;
+  out += '\x1b[' + legendY + ';1H';
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${bold('Last 5 transitions')} ${dim('(from session/events.ndjson · session_id: hub-pi-001)')}\r\n`;
+  const events = [
+    { ts: '14:02:18.421', actor: 'orchestrator', verb: 'set_assertions', detail: 'A1..A6 (6 assertions · source: plan/PR-142)', tone: acc },
+    { ts: '14:02:18.612', actor: 'orchestrator', verb: 'dispatch_agent', detail: 'r1: deep-researcher · task="parity inventory for EDA cancellation types"', tone: ok },
+    { ts: '14:02:24.033', actor: 'r1: deep-researcher', verb: 'NEEDS_RESEARCH:', detail: 'how does the dispatch_policy handle cross-tier substitutions?', tone: warn },
+    { ts: '14:02:24.180', actor: 'hub (auto-research pipe)', verb: 'spawn_research', detail: 'r0: researcher (gpt-5.3-codex-spark)', tone: cyan },
+    { ts: '14:02:31.402', actor: 'hub (auto-research pipe)', verb: 'resume r1', detail: 'findings/dispatch-policy.md (0.6KB) · 1-line notice only', tone: cyan },
+  ];
+  for (const e of events) {
+    out += `${dim(e.ts)}  ${acc(e.actor)}  ${bold(e.verb)}  ${e.tone(e.detail)}\r\n`;
+  }
+
+  out += '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('Protocol messages (Agentic Team Protocol v1.0):')}  `;
+  out += `${acc('create_task_brief → assign_agent → accept_assignment → submit_evidence → review_evidence → handoff_evidence → submit_deliverable → complete_task')}\r\n`;
+  return out;
+};
+
+// ============ 3. ASSERTIONS PANE ============
+views.assertions = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Verification Contract · Assertions Ledger ', C.bg) + '   ';
+  out += `${dim('source:')} ${acc('plan/PR-142 · user request · PR comment')}  `;
+  out += `${dim('hub:')} ${acc('hub-pi-001')}\r\n`;
+  out += `${dim('Summary:')} ${ok('2✓')} ${warn('1○')} ${err('1✗')} · ${dim('open:')} ${acc('A4')} · ${dim('soft-capped at 8')} · ${dim('all assertions carry source')}\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Assertions')} ${dim('(dispatcher-owned, built before first dispatch)')}\r\n\r\n`;
+
+  const arow = (sel, id, tag, status, src, cond, evid) => {
+    const prefix = sel ? `${C.rev} ▶ ${C.reset}` : '   ';
+    const idCol = acc(id.padEnd(4));
+    const tagCol = ({ test: cyan, 'runtime-ui': mag, 'code-grep': warn, manual: (s) => `${C.orange}${s}${C.reset}` }[tag] || dim)(`[${tag}]`.padEnd(13));
+    const statusCol = ({ proven: ok, unproven: warn, failed: err, pending: dim }[status] || dim)(status.padEnd(10));
+    const srcCol = dim(`← ${src}`);
+    const evidCol = evid ? `  ${dim('ev:')} ${evid}` : '';
+    return `${prefix} ${idCol} ${tagCol} ${statusCol} ${cond}${srcCol}${evidCol}\r\n`;
+  };
+
+  out += arow(false, 'A1', 'runtime-ui', 'proven', 'plan/PR-142:L14', 'exactly one "detailed result" checkbox appears for any cancellation, below the winner selection', 'screenshot@cancellation-detail · eda-monorepo');
+  out += arow(false, 'A2', 'runtime-ui', 'proven', 'plan/PR-142:L15', 'A1 holds identically for Walkover, Retired, Disqualified; excluded for NotPlayed', 'screenshots×3 · cancel-state.spec.ts');
+  out += arow(true,  'A3', 'runtime-ui', 'unproven', 'plan/PR-142:L18', 'cancelled match with detailed score entered shows result in standings table — for all 3 types', '');
+  out += arow(false, 'A4', 'runtime-ui', 'failed',  'plan/PR-142:L19', 'same match shows NO result in round-robin/elimination view — for all 3 types', 'runtime-ui evidence · standings.partial.ts · 1/3 types');
+  out += arow(false, 'A5', 'test',       'unproven', 'plan/PR-142:L22', 'validation fires only when ≥1 detailed input filled, then requires all companion fields', '');
+  out += arow(false, 'A6', 'code-grep',  'pending',  'plan/PR-142:L25', 'no walkover-specific branch remains without a Retired/Disqualified counterpart', '');
+
+  out += '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Tag legend')} ${dim('(evidence requirements by tag)')}\r\n`;
+  out += `  ${mag('[runtime-ui]')}  ${dim('requires an artifact path under')} ${acc('.pi/agent-sessions/artifacts/evidence/')} ${dim('— static review does not satisfy')}\r\n`;
+  out += `  ${cyan('[test]')}        ${dim('requires a command and result:')} ${acc('npm test › ✓ 12 passed, 1 failed (a11.spec.ts)')}\r\n`;
+  out += `  ${warn('[code-grep]')}   ${dim('requires pattern + result sample:')}\r\n`;
+  out += `                      ${dim('pattern:')} ${acc('"case .walkover"} ${dim('· result:')} ${err('3 sites in src/eda/display/')}\r\n`;
+  out += `  ${(s => `${C.orange}${s}${C.reset}`)('[manual]')}     ${dim('requires user/ask_user confirmation:')}\r\n`;
+  out += `                      ${acc('ask_user: "Confirm A6 parity across Walkover/Retired/Disqualified" [Pending]')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${bold('Guards')} ${dim('(enforced by the hub before spend)')}\r\n`;
+  out += `  ${ok('✓')} ${dim('All assertions carry source:')} every id traces back to a plan line — sourceless batches refused by id.\r\n`;
+  out += `  ${ok('✓')} ${dim('Batch size ≤ 8:')} ${acc('current batch: 6')} — over the soft cap is accepted with a warning to split the next dispatch.\r\n`;
+  out += `  ${ok('✓')} ${dim('Evidence is named:')} ${ok('A1')} ✓ ${ok('A2')} ✓ — ${warn('A3')} missing evidence → demoted to ${warn('unproven')} by details.contractNotices.\r\n`;
+  out += `  ${err('✗')} ${dim('Wrong plane (Green Checks):')} ${err('A4')} was closed by code review rather than runtime — manually demoted to ${err('failed')}.\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('↑↓')} select  ${dim('Enter')} evidence  ${dim('e')} expand  ${dim('m')} mark proven  ${dim('r')} rebuild  ${dim('Esc')} back\r\n`;
+  return out;
+};
+
+// ============ 4. RETURNS PANE ============
+views.returns = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Returns Pane — Structured Upward Return ', C.bg) + '   ';
+  out += `${dim('dispatch:')} ${acc('d-2026-0142-007')} · ${dim('from:')} ${acc('builder')} → ${acc('orchestrator')}\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${ok('assertions_proven')} ${dim('(named evidence required)')}\r\n`;
+  out += `  ${ok('✓')}  ${acc('A1')} runtime-ui — screenshot captured at /artifacts/evidence/cancellation-detail.png\r\n`;
+  out += `      ${dim('crop:')} ${acc('walkover-selected.png · x=412,y=88,w=120,h=24')} ${dim('verified by')} ${acc('verify-claim A1')}\r\n`;
+  out += `  ${ok('✓')}  ${acc('A2')} runtime-ui — three screenshots + cancel-state.spec.ts · 3/3 ✓\r\n`;
+  out += `      ${dim('files:')} ${acc('walkover.png · retired.png · disqualified.png')} ${dim('·')} ${acc('cancel-state.spec.ts:L42')}\r\n\r\n`;
+
+  out += `${warn('assertions_unproven')}\r\n`;
+  out += `  ${warn('○')}  ${acc('A3')} runtime-ui — NO evidence attached\r\n`;
+  out += `      ${dim('reason:')} ${warn('hub demoted: evidence-less proven claim → unproven')}\r\n`;
+  out += `  ${warn('○')}  ${acc('A5')} test — suite not run in this dispatch\r\n`;
+  out += `      ${dim('reason:')} ${dim('awaiting verifier dispatch · cost-cap at 0.5× dispatch budget')}\r\n\r\n`;
+
+  out += `${err('assertions_failed')}\r\n`;
+  out += `  ${err('✗')}  ${acc('A4')} runtime-ui — closed on wrong plane\r\n`;
+  out += `      ${dim('evidence:')} ${acc('standings.partial.ts:L88')} ${dim('·')} ${dim('only Walkover covered · 2 siblings missing')}\r\n`;
+  out += `      ${dim('note:')} ${err('static review approved the round-robin branch · "Green Checks on the Wrong Plane"')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${bold('changed_files')}\r\n`;
+  out += `  ${dim('src/eda/cancellation/CancellationForm.tsx')}  ${dim('+47')}  ${dim('-3')}  ${dim('·')} ${dim('replace walkover-only branch with type-keyed map')}\r\n`;
+  out += `  ${dim('src/eda/display/StandingsTable.tsx')}          ${dim('+12')}  ${dim('-8')}  ${dim('·')} ${dim('apply show-rule for cancelled matches')}\r\n`;
+  out += `  ${dim('src/eda/types.ts')}                              ${dim('+3')}   ${dim('-0')}  ${dim('·')} ${dim('export CancellationReason union')}\r\n\r\n`;
+
+  out += `${bold('tests_run')}\r\n`;
+  out += `  ${dim('·')} ${acc('npm test -- cancellation')}  ${ok('14 passed, 1 failed (a11.spec.ts)')}\r\n`;
+  out += `  ${dim('·')} ${acc('npx tsc --noEmit')}  ${ok('0 errors')}\r\n\r\n`;
+
+  out += `${bold('open_risks')}\r\n`;
+  out += `  ${dim('·')} ${warn('a11.spec.ts')} failed: assertion "shows standings for Disqualified" — ${dim('see A4')}\r\n`;
+  out += `  ${dim('·')} ${cyan('handoff to code-reviewer pending: scope changed at src/eda/types.ts')}\r\n\r\n`;
+
+  out += `${bold('requires_user_decision')}\r\n`;
+  out += `  ${dim('·')} ${mag('ask_user [Pending]')}  ${dim('"Should A6 parity be enforced as a CI gate (recommended) or a pre-commit hook?"')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('artifact path:')} ${acc('.pi/agent-sessions/artifacts/returns/d-2026-0142-007.md')}  ${dim('(33KB · full output)')}\r\n`;
+  out += `${dim('digest:')} Builder ran 14m 22s · 3 changes · 2 proven, 2 unproven, 1 failed · scope OK · 2 open risks\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('e')} expand full  ${dim('v')} view artifact  ${dim('d')} drill into A4  ${dim('r')} re-dispatch with feedback  ${dim('Esc')} back\r\n`;
+  return out;
+};
+
+// ============ 5. PARITY PANE ============
+views.parity = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Parity / Touchpoint Inventory ', C.bg) + '   ';
+  out += `${dim('triggered by:')} ${acc('"make Disqualified behave like Walkover for the detailed-result flow"')}\r\n`;
+  out += `${dim('inventory owner:')} ${cyan('r1: deep-researcher')}  ${dim('· status:')} ${warn('running · 7 sites enumerated · 2 verified')}\r\n`;
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Per-site verification')} ${dim('(every member of the set must pass, not just the exemplar)')}\r\n\r\n`;
+
+  out += `  ${dim('site'.padEnd(36))} ${dim('Walkover'.padEnd(11))} ${dim('Retired'.padEnd(11))} ${dim('Disqualified'.padEnd(13))} ${dim('note')}\r\n`;
+  out += `  ${dim('─'.repeat(cols - 2))}\r\n`;
+
+  const cell = (v) => v === '✓' ? `  ${ok('✓')}      ` : v === '✗' ? `  ${err('✗')}      ` : v === '…' ? `  ${warn('…')}      ` : `  ${dim('—')}      `;
+  const site = (name, w, r, d, note) => {
+    return `  ${name.padEnd(36)} ${cell(w)} ${cell(r)} ${cell(d)}  ${note}\r\n`;
+  };
+
+  out += site('Feature flag: eda.detailedResult',   '✓', '✓', '✓',  'replaced exemplar-only branch');
+  out += site('Display logic: cancellation-detail', '✓', '✓', '…',  'read identical · pending a11.spec.ts');
+  out += site('Validation: detail-companion',     '✓', '…', '…',  'awaiting verifier A5');
+  out += site('Translations: de.locale',            '✓', '✓', '✓',  're-reviewed 2026-07-26');
+  out += site('Translations: es.locale',            '✓', '✓', '✓',  're-reviewed 2026-07-26');
+  out += site('Test fixtures: cancellation.spec',  '✓', '✓', '…',  'disqualified fixture added · run pending');
+  out += site('Branch coverage: cancelled→table',   '✓', '✗', '✗',  `${err('round-robin/elimination view not covered')}`);
+  out += '\r\n';
+
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Per-set verdict')}\r\n`;
+  out += `  ${ok('✓')}  Walkover ${dim('— exemplar · baseline established')}\r\n`;
+  out += `  ${warn('…')}  Retired ${dim('— partial · awaiting verifier (A5)')}\r\n`;
+  out += `  ${err('✗')}  Disqualified ${dim('— failed · see A4 (round-robin/elimination not covered)')}\r\n\r\n`;
+
+  out += `${bold('Parity inventory checklist')}\r\n`;
+  out += `  ${ok('[x]')} Every exemplar special-case site enumerated ${dim('(feature flags, branches, display, validation, translations, fixtures, tests)')}\r\n`;
+  out += `  ${ok('[x]')} Each site mapped to an assertion covering the ${bold('WHOLE')} set, not just the exemplar\r\n`;
+  out += `  ${warn('[~]')} Verification plan re-runs the same proof for every member of the set ${dim('(in progress · 2/7 sites verified)')}\r\n`;
+  out += `  ${ok('[x]')} A ${acc('code-grep')} assertion guards against any exemplar-only branch surviving ${dim('(A6)')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('Refusal gate:')} if any cell reads ${err('✗')} on the ${bold('WHOLE set')} (not the exemplar alone), the dispatch is rejected — never "done."\r\n`;
+  out += `${dim('Honest display:')} ${warn('…')} means ${dim('pending')} — not success. A dispatch with ${warn('…')} cells is not complete.\r\n`;
+  return out;
+};
+
+// ============ 6. PASSPORT ============
+views.passport = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Passport — Identity, Attestation, Delegation ', C.bg) + '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Identity')} ${dim('· Layer 1 · Agent Passport Protocol')}\r\n`;
+  out += `  ${dim('agent:')}        ${acc('hub-pi-001')} ${dim('(orchestrator persona)')}\r\n`;
+  out += `  ${dim('key:')}          ${acc('ed25519:7f3a 8b9c d1e2 f304 a5b6 c7d8 e9f0 1234 5678 9abc def0 1234 5678 9abc def0 1234 5678 9abc def0')}\r\n`;
+  out += `  ${dim('fingerprint:')} ${acc('sha256:3a7f 81d9 e2b4 0c6d a5f7 4e8b 9c2d 1e3f')}\r\n`;
+  out += `  ${dim('attestation:')} ${ok('✓ signed')}  ${dim('values floor:')} ${acc('agent-team-protocol v1.0')}  ${dim('beneficiary:')} ${acc('principal-001')}\r\n`;
+  out += `  ${dim('status:')}       ${ok('attested')} · ${dim('last renewed:')} ${dim('14:00:02')} · ${dim('expires:')} ${dim('14:00:02 + 24h')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+  out += `${bold('Delegation scopes')} ${dim('· what this agent is authorised to do')}\r\n\r\n`;
+
+  const scope = (name, grantedBy, depth, expires, spend, tools) => {
+    out += `  ${acc('▸ ' + name)}\r\n`;
+    out += `    ${dim('granted_by:')} ${cyan(grantedBy)}   ${dim('depth:')} ${acc(depth)}   ${dim('expires:')} ${dim(expires)}\r\n`;
+    out += `    ${dim('spend:')} ${ok('$0.83')} ${dim('of')} ${ok('$5.00')} ${dim('· remaining')} ${ok('$4.17')} ${dim('· window: 1h rolling')}\r\n`;
+    out += `    ${dim('tools:')} ${tools}\r\n`;
+  };
+
+  scope('dispatch_agent (native)', 'principal-001 (root)', 'unlimited → children depth=1', 'in 23h 58m', 'tools: dispatch_agent, spawn_research, ask_user, coms_send, coms_await, set_assertions');
+  scope('delegate (mid-turn sub-roles)', 'principal-001 (root)', '1 (terminal children only)', 'in 23h 58m', 'tools: per declared subagent model · read-only unless allow_write=true');
+  scope('file.write', 'auto-granted (project rules)', 'scoped to src/eda/**', 'session-bounded', 'tools: write, edit (per dispatch scope field)');
+  scope('browser-test', 'opt-in via ask_user', 'browser-testing-with-devtools', 'session-bounded', 'tools: chrome_devtools__* (via MCP peer)');
+  scope('commerce (denied by default)', '—', '—', '—', 'tools: ∅  · would require human approval gate');
+
+  out += '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Agora')} ${dim('· Layer 4 · signed messages this session exchanged')}\r\n\r\n`;
+  out += `  ${dim('time')}  ${dim('peer')}              ${dim('verb')}              ${dim('hash')}                            ${dim('sig')}\r\n`;
+  out += `  ${dim('14:02')}  ${acc('researcher')}     ${acc('NEEDS_RESEARCH')}    ${acc('a3f7…c2d1')}                       ${ok('✓')}\r\n`;
+  out += `  ${dim('14:02')}  ${acc('r1:deep-res.')}    ${acc('submit_evidence')}   ${acc('8e14…91bb')}                       ${ok('✓')}\r\n`;
+  out += `  ${dim('14:03')}  ${acc('plan-reviewer')}   ${acc('accept_assignment')} ${acc('5d72…04ac')}                       ${ok('✓')}\r\n`;
+  out += `  ${dim('14:03')}  ${acc('builder')}        ${acc('handoff_evidence')}  ${acc('1f9c…3e88')}                       ${ok('✓')}\r\n`;
+  out += `  ${dim('14:03')}  ${acc('archivist')}      ${acc('awaiting_complete')} ${acc('—')}                              ${dim('·')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n\r\n';
+  out += `${bold('Failure signals')} ${dim('(memory-systems: federated failure modes')}\r\n`;
+  out += `  ${ok('✓ no scope violations in this session')}\r\n`;
+  out += `  ${ok('✓ no revoked delegations referenced')}\r\n`;
+  out += `  ${ok('✓ no stale identity refs (comparable to "conversation reset" MAST mode)')}\r\n`;
+  out += `  ${ok('✓ no information-withholding detected (every assert_source carried')}\r\n`;
+  return out;
+};
+
+// ============ 7. SESSION MODAL ============
+views.modal = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+  out += bg(' Fleet Dashboard · Modal: detail of "builder" ', C.bg) + '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Fleet')} ${dim('(condensed)')}\r\n\r\n`;
+  const rows = [
+    { sel: false, g: '◐', n: 'orchestrator',   m: 'opus-4.6',       s: 'synthesising',  t: 'hub-pi-001' },
+    { sel: false, g: '◐', n: 'planner',         m: 'gpt-5.5 (xh)',   s: 'running',       t: '↳ delegate scout' },
+    { sel: false, g: '◐', n: 'plan-reviewer',   m: 'gpt-5.5 (xh)',   s: 'booting',       t: '↳ delegate deps' },
+    { sel: true,  g: '●', n: 'builder',         m: 'sonnet-4.6',     s: 'scoped-write',  t: '↳ delegate recon' },
+    { sel: false, g: '●', n: 'code-reviewer',   m: 'opus-4.7 ⇄coms', s: 'working',       t: '↳ delegate preflight' },
+    { sel: false, g: '✓', n: 'test-engineer',   m: 'gpt-5.4',       s: 'idle',          t: '' },
+    { sel: false, g: '✓', n: 'documenter',      m: 'spark',          s: 'idle',          t: '' },
+    { sel: false, g: '◐', n: 'r1: deep-res.',   m: 'gpt-5.5 (xh)',   s: 'running',       t: '' },
+    { sel: false, g: '✓', n: 'r2: researcher',  m: 'spark',          s: 'done',          t: '' },
+  ];
+  for (const r of rows) {
+    const prefix = r.sel ? `${C.rev} ▸${C.reset}` : '  ';
+    const g = r.g === '●' ? ok(r.g) : r.g === '✗' ? err(r.g) : r.g === '◐' ? warn(r.g) : dim(r.g);
+    const nameCol = (r.sel ? bold : (s) => dim(s))(r.n).padEnd(20);
+    out += `${prefix} ${g} ${nameCol}  ${dim('model:')} ${r.m}\r\n`;
+    if (r.sel) {
+      out += `       ${dim('state:')} ${r.s.padEnd(15)}  ${dim('delegates:')} ${r.t || '—'}\r\n`;
+    }
+  }
+
+  out += '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n\r\n`;
+
+  out += `${bold('Builder')} ${dim('·')} ${acc('d-2026-0142-007')} ${dim('·')} ${cyan('sonnet-4.6')} ${dim('· context 58%')}\r\n`;
+  out += `${dim('cwd:')} /home/user/projects/eda-monorepo  ${dim('· project:')} eda-monorepo\r\n`;
+  out += `${dim('purpose:')} Implement EDA library API parity across Walkover/Retired/Disqualified\r\n`;
+  out += `${dim('started:')} 14:02:51  ${dim('· uptime:')} ${acc('14m 22s')}  ${dim('· heart-beat:')} ${ok('alive 2s ago')}\r\n`;
+  out += `${dim('passport:')} ${acc('ed25519:7f3a…')} ${ok('attested')}  ${dim('delegation:')} ${acc('dispatch_agent · depth=1 · $0.18 / $5.00')}\r\n\r\n`;
+
+  out += `${bold('Live activity tail')} ${dim('(per-tool allowlist projection — never raw transcript)')}\r\n`;
+  out += `  ${dim('14:17:08')}  ${acc('bash')}            ${ok('cargo test --lib cancellation')}    ${ok('exit 0')}  ${dim('12.4s')}\r\n`;
+  out += `  ${dim('14:17:21')}  ${acc('read')}            ${acc('src/eda/types.ts')}                 ${ok('ok')}      ${dim('0.3KB · 89 lines')}\r\n`;
+  out += `  ${dim('14:17:23')}  ${acc('edit')}            ${acc('src/eda/cancellation/CancellationForm.tsx')}  ${ok('+47 -3')}  ${dim('typed replacement')}\r\n`;
+  out += `  ${dim('14:17:24')}  ${warn('drift-watchdog')}  ${warn('⚠ scope_violations: 0')}             ${dim('in-scope')}\r\n`;
+  out += `  ${dim('14:17:31')}  ${acc('bash')}            ${ok('npx tsc --noEmit')}                 ${ok('exit 0')}\r\n\r\n`;
+
+  out += `${bold('Actions')}\r\n`;
+  out += `  ${acc('[focus pane]')}    ${dim('· brings herdr pane 12 to front · pane is live')}    ${ok('✓ enabled')}\r\n`;
+  out += `  ${dim('[cancel]')}         ${dim('· SIGTERM the dispatch · partial output preserved as artifacts/failures/')}  ${warn('△ requires confirm')}\r\n`;
+  out += `  ${dim('[restart]')}        ${dim('· clears session · re-dispatches prior task fresh')}              ${warn('△ requires confirm')}\r\n`;
+  out += `  ${dim('[m: model]')}       ${dim('· switch model for this persona (from declared candidates)')}        ${ok('✓ enabled')}\r\n`;
+  out += `  ${dim('[z: zoom]')}        ${dim('· opens /af-zoom in full-screen')}                              ${ok('✓ enabled')}\r\n`;
+  out += `  ${dim('[steer]')}          ${dim('· send a follow-up message into this agent (mid-run) · coms scope')}  ${ok('✓ enabled')}\r\n\r\n`;
+
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${dim('↑↓ navigate · Enter drill · Tab next tab · Esc close · x cancel · r restart · m model')}\r\n`;
+  return out;
+};
+
+// ============ 8. COMPACT WIDGET ============
+views.compact = function () {
+  const { cols } = term;
+  let out = '\x1b[H';
+
+  out += `${bold('Compact widget above editor')} ${dim('(Alt+Shift+A · shown only when running agents exist)')}\r\n\r\n`;
+
+  out += `${dim('┌─ fleet · /af-build · feature tier · turn 2/8 · task 5/18 ───────────────────────────────────────┐')}\r\n`;
+  const compactRow = (glyph, name, model, ctx, state, extra) => {
+    const g = glyph === '●' ? ok(glyph) : warn(glyph);
+    return `│ ${g} ${bold(name.padEnd(18))}  ${dim('model:')} ${model.padEnd(22)} ${dim('ctx:')} ${ctx.padEnd(6)} ${dim('state:')} ${state.padEnd(16)} ${extra} │\r\n`;
+  };
+  out += compactRow('●', 'orchestrator',   'opus-4.6',           '67%',  'synthesising',  `${dim('composing A4..A6')}`);
+  out += compactRow('◐', 'planner',         'gpt-5.5 (xh)',       '34%',  'running',      `${dim('↳ scout (spark) 12s')}`);
+  out += compactRow('◐', 'plan-reviewer',   'gpt-5.5 (xh)',       '12%',  'running',      `${dim('↳ deps (spark)')}`);
+  out += compactRow('●', 'builder',         'sonnet-4.6',         '58%',  'scoped-write', `${dim('↳ recon · scope OK')}`);
+  out += compactRow('◐', 'code-reviewer ⇄','opus-4.7',          '22%',  'working',      `${dim('↳ preflight (spark)')}`);
+  out += compactRow('◐', 'r1: deep-res.',   'gpt-5.5 (xh)',       '8%',   'running',      `${dim('parity inventory')}`);
+  out += `${dim('└───────────────────────────────────────────────────────────────────────────────────────┘')}\r\n\r\n`;
+
+  out += `${dim('(editor + transcript collapsed while watching the fleet · press Alt+Shift+A to hide)')}\r\n\r\n\r\n`;
+
+  out += `${bold('Pause vs Cancel semantics')} ${dim('(three distinct states, three distinct affordances)')}\r\n\r\n`;
+
+  const state = (glyph, label, color, affordances) => {
+    return `  ${color(glyph)} ${bold(label)} ${dim('— ' + affordances)}\r\n`;
+  };
+
+  out += state('◐', 'paused_by_user',
+    warn,
+    'the run is held, the next step is queued, the model is not invoked · user can resume with /af-work-mode continue');
+  out += state('⊘', 'interrupted',
+    cyan,
+    'paused but with an unresolved tool call in flight · Resume vs Cancel offered explicitly');
+  out += state('✗', 'cancelled',
+    err,
+    'terminal destructive state · the run is over · no resume');
+
+  out += '\r\n';
+  out += `${dim('─'.repeat(cols))}\r\n`;
+  out += `${bold('Three states the TUI must distinguish')} ${dim('(halving cancel into paused/interrupted keeps cancel destructive)')}\r\n\r\n`;
+  out += `  ${dim('·')} ${acc('paused')}  ${dim('→ soft:')} the next specialist step is held in a queue; the model is not woken; the prompt input still accepts new messages.\r\n`;
+  out += `  ${dim('·')} ${acc('interrupted')} ${dim('→ mid-soft:')} a tool call is in flight; the UI offers Resume or Cancel; the partial result is preserved as artifacts/failures/.\r\n`;
+  out += `  ${dim('·')} ${acc('cancelled')} ${dim('→ terminal:')} the run is closed; the assertions ledger is sealed with whatever was proven; partial output is preserved at .pi/agent-sessions/runs/<id>/artifacts/.\r\n`;
+
+  return out;
+};
+
+// ============================================================
+// Tab switching
+// ============================================================
+const tabs = document.querySelectorAll('.tab');
+let currentView = 'dashboard';
+
+function render(viewName) {
+  currentView = viewName;
+  term.write('\x1b[2J\x1b[H');
+  term.write(views[viewName]());
+  fitAddon.fit();
+}
+
+tabs.forEach(tab => {
+  tab.addEventListener('click', () => {
+    tabs.forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    render(tab.dataset.tab);
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  const map = { '1': 'dashboard', '2': 'dispatch', '3': 'assertions', '4': 'returns', '5': 'parity', '6': 'passport', '7': 'modal', '8': 'compact' };
+  if (map[e.key]) {
+    tabs.forEach(t => t.classList.remove('active'));
+    const target = document.querySelector(`[data-tab="${map[e.key]}"]`);
+    if (target) target.classList.add('active');
+    render(map[e.key]);
+  }
+});
+
+window.addEventListener('resize', () => {
+  fitAddon.fit();
+  render(currentView);
+});
+
+requestAnimationFrame(() => {
+  fitAddon.fit();
+  render('dashboard');
+});
+</script>
+</body>
+</html>
