@@ -10,7 +10,6 @@ This document is the project's extension: a marker grammar that wraps the durabl
 - Markers are never invented ad hoc; if a hand-off needs a new shape, the new shape is a new entry in this document before any worker uses it.
 - The Dispatcher refuses a marker whose claimed signer is not allowed.
 - The Archivist enforces append-only — corrections are new entries with `supersedes:`, never edits.
-- The canonical marker list lives in `packages/pi-agents-team/src/src/memory/atp-markers.ts` (`ATP_MARKERS`). This document is the human-readable description of that table. When the runtime table and this document disagree, the runtime table is correct and this document is out of date.
 
 ## Marker reference (project extension)
 
@@ -56,17 +55,3 @@ A claimed result without its evidence record is NOT validated.
 Each marker carries a `round: N` field. `supersedes:` is included when round ≥ 2. The comment with the highest `round:` not named by a later `supersedes:` is current; everything else is history.
 
 The Archivist enforces this — the durable record is append-only, and the history is a sequence of entries with `supersedes:` links, not a set of editable rows.
-
-## Worktree context
-
-When the harness runs parallel tasks in git worktrees, relevant markers include `worktreePath` in their metadata. The path is the worker's dedicated checkout directory; it lets the orchestrator route follow-up work to the same tree and lets the Archivist reconstruct which tree produced a given artefact. Worktree paths are recorded on `[routing]`, `[action]`, `[verdict]`, `[recorded]` worker events, and any `[handoff]` that transfers ownership of a live task.
-
-## Worker-event markers
-
-The runtime table also defines three orchestrator/archivist telemetry markers that are *not* lifecycle stages but are first-class records in the durable store:
-
-- `[worker-terminal]` — written by the orchestrator when a worker reaches `completed` / `error` / `aborted`. Records under `stage: recording-and-archival` for grouping.
-- `[worker-relay]` — written by the orchestrator when a worker raises a relay question.
-- `[worker-pruned]` — written by the archivist when worker state is pruned (cost, memory, or session-end cleanup).
-
-These markers exist so the durable record can reconstruct the full execution trace (which workers ran, when they finished, what they relayed, what was pruned) without depending on a separate telemetry channel. They are emitted with `workerEvent: true` in metadata so consumers can distinguish them from stage-completion markers at a glance.

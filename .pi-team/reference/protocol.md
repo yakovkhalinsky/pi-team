@@ -78,20 +78,6 @@ The protocol is harness-agnostic. Each harness represents roles differently — 
 
 For pi.dev specifically: the Team Lead session acts as the orchestrator and hosts Stage 1 (Goal receipt) and the closure half of Stage 7 (Hand-off or closure). Each paper role runs as a background RPC worker via `delegate_task`. The protocol-level markers, lifecycle status, and durable record live in the project workspace; identity discipline (role name verbatim, signatures grep-able) is enforced on every artefact the worker posts.
 
-## Parallel worktrees
-
-When the harness supports it, each parallel task may run in its own git worktree so that concurrent builders, runtimes, and verifiers do not share the same checked-out working tree. A worktree is a separate directory backed by the same `.git` metadata, so branch state, uncommitted changes, and tool output stay isolated per worker.
-
-Worktree support is opt-in. When enabled, the orchestrator:
-
-1. Detects the git repository root from the requested cwd.
-2. Creates a dedicated worktree under a configurable base path (for example, `.pi-team/worktrees/<workerId>`) inside the repo root.
-3. Launches the worker RPC process with the worktree as its cwd.
-4. Records the worktree path in worker state, dashboard inspect, copy output, and ATP markers so the orchestrator can route follow-up work to the correct tree.
-5. Removes the worktree on terminal transition or explicit prune, using `git worktree remove` with best-effort force fallback.
-
-Non-git projects fall back to the original cwd; worktree creation failures propagate as delegation errors unless the manager is configured to fall back. Reused workers keep their existing worktree because their RPC process was spawned there; `delegate_task.reuseWorkerId` only matches when the resolved worktree path equals the worker's recorded cwd.
-
 ## Governance (§8)
 
 Teams that span more than one session need a charter. The charter defines the team's identity, mission, boundaries, roles, decision rights, dependencies, runbooks, skills, and retirement condition. Governance separates the Founders' Circle, which charters and ratifies, from Anchor Operations, which runs product teams inside guardrails.
