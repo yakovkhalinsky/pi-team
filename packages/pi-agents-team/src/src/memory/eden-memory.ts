@@ -61,6 +61,23 @@ function buildIdentityArgs(options = {}) {
   return args;
 }
 
+/**
+ * Identity args for subcommands that do NOT accept --workspace-id.
+ *
+ * As of eden-memory v0.3.137 the `remember` and `document` subcommands reject
+ * `--workspace-id` ("unknown command: \"--workspace-id\""). The search/health/
+ * document-cross-workspace subcommands accept it; rememberRecord and documentGoal
+ * used to share buildIdentityArgs and silently failed every write because the
+ * workspace-id flag was unknown to those subcommands. The asymmetry is
+ * deliberate: workspace is selected by the database path / context, not by a
+ * CLI flag, for these two write paths.
+ */
+function buildIdentityArgsForRemember(options = {}) {
+  const { workspaceId, ...rest } = options;
+  void workspaceId;
+  return buildIdentityArgs(rest);
+}
+
 function spawnEden(bin, subcommand, args, options = {}) {
   const { signal, timeoutMs = 10_000 } = options;
   return new Promise((resolve, reject) => {
@@ -219,7 +236,7 @@ export async function rememberRecord(record, options = {}, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
     ...buildGlobalArgs(options),
-    ...buildIdentityArgs(options),
+    ...buildIdentityArgsForRemember(options),
   ];
   args.push("--content", buildRememberContent(record));
   if (record.id) args.push("--id", record.id);
@@ -254,7 +271,7 @@ export async function documentGoal(options, signal, timeoutMs) {
   const bin = options.bin ?? EDEN_DEFAULTS.bin;
   const args = [
     ...buildGlobalArgs(options),
-    ...buildIdentityArgs(options),
+    ...buildIdentityArgsForRemember(options),
   ];
   if (options.goalId) args.push("--goal-id", options.goalId);
   if (options.topic) args.push("--topic", options.topic);
@@ -397,6 +414,7 @@ export function getMissingRequiredEdenOptions(options = {}) {
 export const _testing = {
   buildGlobalArgs,
   buildIdentityArgs,
+  buildIdentityArgsForRemember,
   buildRememberContent,
   cleanErrorMessage,
   normalizeTags,

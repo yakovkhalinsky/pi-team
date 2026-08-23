@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -145,6 +145,84 @@ console.log("ok");
 `);
     const result = await health({ bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent" });
     assert.equal(result.ok, true);
+  });
+
+  it("rememberRecord does not pass --workspace-id to the remember subcommand", async () => {
+    // Regression test for the silent failure where every session's ATP marker
+    // write returned ok:false with error "unknown command: --workspace-id".
+    // Root cause: buildIdentityArgs prepended --workspace-id before the
+    // subcommand, but the remember subcommand in eden-memory v0.3.137 does
+    // NOT accept that flag (search/health/document-cross-workspace do).
+    const capturePath = join(tmpDir, "argv-capture.json");
+    const bin = makeFakeBin(`
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));
+console.log(JSON.stringify({ id: "mem-regression", status: "remembered" }));
+`);
+    const result = await rememberRecord(
+      { content: "[action] regression", metadata: { marker: "[action]", stage: "action" }, tags: ["action"] },
+      {
+        bin,
+        db: "/x.db",
+        workspaceId: "ws",
+        userId: "user",
+        agentId: "agent",
+        llmApiKey: "ollama",
+        llmBaseUrl: "http://127.0.0.1:11434/v1",
+      },
+    );
+    assert.equal(result.ok, true, `rememberRecord should succeed; got ${JSON.stringify(result)}`);
+    const captured = JSON.parse(readFileSync(capturePath, "utf8")) as string[];
+    // Subcommand must be the first positional.
+    assert.equal(captured[0], "remember", `first arg must be the subcommand; got ${captured[0]}`);
+    // --workspace-id must NOT be in the argv at all (remember subcommand rejects it).
+    assert.ok(
+      !captured.includes("--workspace-id"),
+      `argv must not contain --workspace-id; captured: ${JSON.stringify(captured)}`,
+    );
+    // The other identity flags must still be present.
+    const idxOf = (flag: string) => captured.indexOf(flag);
+    assert.ok(idxOf("--agent-id") >= 0 && captured[idxOf("--agent-id") + 1] === "agent");
+    assert.ok(idxOf("--user-id") >= 0 && captured[idxOf("--user-id") + 1] === "user");
+    assert.ok(idxOf("--llm-api-key") >= 0 && captured[idxOf("--llm-api-key") + 1] === "ollama");
+    assert.ok(idxOf("--llm-base-url") >= 0 && captured[idxOf("--llm-base-url") + 1] === "http://127.0.0.1:11434/v1");
+  });
+
+  it("documentGoal does not pass --workspace-id to the document subcommand", async () => {
+    // Same regression as rememberRecord, for the document subcommand.
+    const capturePath = join(tmpDir, "argv-capture-document.json");
+    const bin = makeFakeBin(`
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));
+console.log("document body");
+`);
+    const result = await documentGoal(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", goalId: "g1" },
+    );
+    assert.equal(result.ok, true);
+    const captured = JSON.parse(readFileSync(capturePath, "utf8")) as string[];
+    assert.equal(captured[0], "document");
+    assert.ok(!captured.includes("--workspace-id"), `argv must not contain --workspace-id; got ${JSON.stringify(captured)}`);
+  });
+
+  it("search still passes --workspace-id (the search subcommand accepts it)", async () => {
+    // Symmetric guard: search and health DO accept --workspace-id, so the
+    // asymmetric fix above must not have stripped it from them.
+    const capturePath = join(tmpDir, "argv-capture-search.json");
+    const bin = makeFakeBin(`
+const fs = require("node:fs");
+fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify(process.argv.slice(2)));
+console.log(JSON.stringify({ results: [] }));
+`);
+    const result = await search(
+      { bin, db: "/x.db", workspaceId: "ws", userId: "user", agentId: "agent", keywords: "k" },
+    );
+    assert.equal(result.ok, true);
+    const captured = JSON.parse(readFileSync(capturePath, "utf8")) as string[];
+    assert.equal(captured[0], "search");
+    assert.ok(captured.includes("--workspace-id"), `argv must still contain --workspace-id for search; got ${JSON.stringify(captured)}`);
+    const i = captured.indexOf("--workspace-id");
+    assert.equal(captured[i + 1], "ws");
   });
 
   it("reports missing required fields from merged eden options", () => {
